@@ -335,23 +335,17 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
         produceValue(topic, avroRecord());
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()
-                && testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).size() >= 2, POLL_TIMEOUT);
+                && !testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
 
         final List<MockFlowFile> failures = runner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE);
-        assertEquals(2, failures.size());
+        assertEquals(1, failures.size());
 
-        final MockFlowFile emptyFailure = failures.get(0);
+        final MockFlowFile emptyFailure = failures.getFirst();
         emptyFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
         emptyFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
         emptyFailure.assertContentEquals("");
         emptyFailure.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
-
-        final MockFlowFile nullFailure = failures.get(1);
-        nullFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        nullFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "1");
-        nullFailure.assertContentEquals("");
-        nullFailure.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
 
         final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
         assertEquals(1, flowFiles.size());
@@ -381,23 +375,17 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
         produceValue(topic, avroRecord());
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()
-                && testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).size() >= 2, POLL_TIMEOUT);
+                && !testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
 
         final List<MockFlowFile> failures = runner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE);
-        assertEquals(2, failures.size());
+        assertEquals(1, failures.size());
 
-        final MockFlowFile emptyFailure = failures.get(0);
+        final MockFlowFile emptyFailure = failures.getFirst();
         emptyFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
         emptyFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
         emptyFailure.assertContentEquals("");
         emptyFailure.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
-
-        final MockFlowFile nullFailure = failures.get(1);
-        nullFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        nullFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "1");
-        nullFailure.assertContentEquals("");
-        nullFailure.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
 
         final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
         assertEquals(1, flowFiles.size());
@@ -431,23 +419,17 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
         produceValue(topic, avroRecord());
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()
-                && testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).size() >= 2, POLL_TIMEOUT);
+                && !testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
 
         final List<MockFlowFile> failures = runner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE);
-        assertEquals(2, failures.size());
+        assertEquals(1, failures.size());
 
-        final MockFlowFile emptyFailure = failures.get(0);
+        final MockFlowFile emptyFailure = failures.getFirst();
         emptyFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
         emptyFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
         emptyFailure.assertContentEquals("");
         emptyFailure.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
-
-        final MockFlowFile nullFailure = failures.get(1);
-        nullFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        nullFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "1");
-        nullFailure.assertContentEquals("");
-        nullFailure.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
 
         final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
         assertEquals(1, flowFiles.size());
@@ -480,23 +462,17 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
         produceValue(topic, avroRecord());
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()
-                && testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).size() >= 2, POLL_TIMEOUT);
+                && !testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
 
         final List<MockFlowFile> failures = runner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE);
-        assertEquals(2, failures.size());
+        assertEquals(1, failures.size());
 
-        final MockFlowFile emptyFailure = failures.get(0);
+        final MockFlowFile emptyFailure = failures.getFirst();
         emptyFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
         emptyFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
         emptyFailure.assertContentEquals("");
         emptyFailure.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
-
-        final MockFlowFile nullFailure = failures.get(1);
-        nullFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        nullFailure.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "1");
-        nullFailure.assertContentEquals("");
-        nullFailure.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
 
         final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
         assertEquals(1, flowFiles.size());

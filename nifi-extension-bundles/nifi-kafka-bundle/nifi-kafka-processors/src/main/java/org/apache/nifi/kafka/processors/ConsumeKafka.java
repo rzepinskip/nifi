@@ -791,8 +791,16 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
 
         final RecordReaderFactory readerFactory = context.getProperty(RECORD_READER).asControllerService(RecordReaderFactory.class);
         int recordIndex = 0;
+        int parsedRecords = 0;
+        int skippedTombstones = 0;
         for (final ByteRecord byteRecord : records) {
             recordIndex++;
+            if (byteRecord.isTombstone()) {
+                skippedTombstones++;
+                continue;
+            }
+
+            parsedRecords++;
             final Map<String, String> recordAttributes = KafkaUtils.toAttributes(
                 byteRecord, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets);
 
@@ -818,10 +826,21 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
                 .build();
         }
 
+        if (parsedRecords == 0) {
+            return new ConfigVerificationResult.Builder()
+                .verificationStepName("Parse Records")
+                .outcome(Outcome.SUCCESSFUL)
+                .explanation("Skipped " + skippedTombstones + " tombstone records and received no data records to parse")
+                .build();
+        }
+
+        final String explanation = skippedTombstones == 0
+                ? "Successfully parsed " + parsedRecords + " records"
+                : "Successfully parsed " + parsedRecords + " records and skipped " + skippedTombstones + " tombstone records";
         return new ConfigVerificationResult.Builder()
             .verificationStepName("Parse Records")
             .outcome(Outcome.SUCCESSFUL)
-            .explanation("Successfully parsed " + recordIndex + " records")
+            .explanation(explanation)
             .build();
     }
 
