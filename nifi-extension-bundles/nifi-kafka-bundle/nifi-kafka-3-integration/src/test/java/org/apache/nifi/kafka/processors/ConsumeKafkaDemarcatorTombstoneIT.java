@@ -36,7 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Demarcator output when a batch contains a null tombstone, a non-null empty value, or both together with a real value.
- * The tombstone attribute is set only when the bundled FlowFile content is empty.
+ * A null value is omitted from the bundle and its offset is still committed. A non-null empty value stays in the bundle
+ * and does not set kafka.tombstone.
  */
 class ConsumeKafkaDemarcatorTombstoneIT extends AbstractConsumeKafkaIT {
 
@@ -80,17 +81,18 @@ class ConsumeKafkaDemarcatorTombstoneIT extends AbstractConsumeKafkaIT {
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "2");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "3");
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "2");
         flowFile.assertContentEquals(NON_EMPTY_VALUE);
         flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
     }
 
     @Test
-    void testDemarcatorNull() throws ExecutionException, InterruptedException {
+    void testDemarcatorSkipsNullValue() throws ExecutionException, InterruptedException {
         final String topic = configure();
         runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, "|");
         runner.run(1, false, true);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_EMPTY_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -100,11 +102,11 @@ class ConsumeKafkaDemarcatorTombstoneIT extends AbstractConsumeKafkaIT {
 
         final MockFlowFile flowFile = flowFiles.getFirst();
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "0");
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "1");
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "1");
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "1");
-        flowFile.assertContentEquals("");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
+        flowFile.assertContentEquals(NON_EMPTY_VALUE);
+        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
     }
 
     @Test
@@ -126,7 +128,7 @@ class ConsumeKafkaDemarcatorTombstoneIT extends AbstractConsumeKafkaIT {
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "0");
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "1");
         flowFile.assertContentEquals("");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
+        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
     }
 
     private String configure() {

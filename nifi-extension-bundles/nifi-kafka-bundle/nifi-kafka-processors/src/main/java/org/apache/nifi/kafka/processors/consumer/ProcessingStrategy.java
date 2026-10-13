@@ -25,7 +25,8 @@ public enum ProcessingStrategy implements DescribedValue {
     FLOW_FILE("Write one FlowFile for each Kafka Record consumed. "
             + "A null value is an empty FlowFile with kafka.tombstone set to true; a non-null empty value does not set that attribute."),
 
-    DEMARCATOR("Write one FlowFile for each batch of Kafka Records consumed (optionally grouped by Kafka key)"),
+    DEMARCATOR("Write one FlowFile for each batch of Kafka Records consumed (optionally grouped by Kafka key). "
+            + "A null value is skipped and its offset is still committed. A non-null empty value is included in the bundle."),
 
     RECORD("Write one FlowFile containing multiple Kafka Records consumed and processed with Record Reader and Record Writer");
 

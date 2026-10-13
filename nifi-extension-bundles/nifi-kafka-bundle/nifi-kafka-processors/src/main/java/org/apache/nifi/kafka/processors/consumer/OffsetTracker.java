@@ -35,10 +35,7 @@ public class OffsetTracker {
     private final AtomicLong totalRecordSize = new AtomicLong();
 
     public void update(final ByteRecord consumerRecord) {
-        final TopicPartitionSummary topicPartitionSummary = new TopicPartitionSummary(consumerRecord.getTopic(), consumerRecord.getPartition());
-        final long offset = consumerRecord.getOffset();
-        final OffsetSummary offsetSummary = offsets.computeIfAbsent(topicPartitionSummary, (summary) -> new OffsetSummary(offset));
-        offsetSummary.setOffset(offset);
+        trackOffset(consumerRecord);
 
         final long bundledCount = consumerRecord.getBundledCount();
         recordCounts.merge(consumerRecord.getTopic(), bundledCount, Long::sum);
@@ -50,6 +47,17 @@ public class OffsetTracker {
         }
 
         totalRecordSize.addAndGet(recordSize);
+    }
+
+    /**
+     * Records an offset without counting the record.
+     * A later bundled record carries the first offset in the batch, so this keeps the highest offset seen.
+     */
+    public void trackOffset(final ByteRecord consumerRecord) {
+        final TopicPartitionSummary topicPartitionSummary = new TopicPartitionSummary(consumerRecord.getTopic(), consumerRecord.getPartition());
+        final long offset = consumerRecord.getOffset();
+        final OffsetSummary offsetSummary = offsets.computeIfAbsent(topicPartitionSummary, (summary) -> new OffsetSummary(offset));
+        offsetSummary.setOffset(offset);
     }
 
     public void recordConsumed(final TopicPartitionSummary topicPartition, final long records, final long bytes) {

@@ -22,19 +22,23 @@ import org.apache.nifi.components.ConfigVerificationResult.Outcome;
 import org.apache.nifi.kafka.processors.consumer.KafkaMetricName;
 import org.apache.nifi.kafka.processors.consumer.ProcessingStrategy;
 import org.apache.nifi.kafka.service.api.KafkaConnectionService;
+import org.apache.nifi.kafka.service.api.common.OffsetSummary;
 import org.apache.nifi.kafka.service.api.common.PartitionState;
 import org.apache.nifi.kafka.service.api.common.TopicPartitionSummary;
 import org.apache.nifi.kafka.service.api.consumer.KafkaConsumerService;
+import org.apache.nifi.kafka.service.api.consumer.PollingSummary;
 import org.apache.nifi.kafka.service.api.record.ByteRecord;
 import org.apache.nifi.kafka.shared.attribute.KafkaFlowFileAttribute;
 import org.apache.nifi.reporting.InitializationException;
 import org.apache.nifi.serialization.RecordReader;
 import org.apache.nifi.serialization.RecordReaderFactory;
+import org.apache.nifi.util.MockFlowFile;
 import org.apache.nifi.util.TestRunner;
 import org.apache.nifi.util.TestRunners;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -373,6 +377,78 @@ class ConsumeKafkaTest {
     }
 
     @Test
+    public void testOnTriggerDemarcatorSkipsTombstoneAndKeepsEmptyValue() throws Exception {
+        setConnectionService();
+        configureProcessor();
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.DEMARCATOR);
+        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, RECORD_DEMARCATOR);
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+
+        final ByteRecord emptyRecord = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0, 0L, new ArrayList<>(), null, new byte[0], 1);
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 1, 0L, new ArrayList<>(), null, new byte[0], 1, true);
+        final ByteRecord valueRecord = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 2, 0L, new ArrayList<>(), null, FIRST_RECORD_VALUE, 1);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(emptyRecord, tombstone, valueRecord)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 1);
+        final MockFlowFile flowFile = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).getFirst();
+        flowFile.assertContentEquals(FIRST_RECORD_VALUE);
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "2");
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "2");
+        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
+        assertEquals(3L, runner.getCounterValue("Records Received from " + TEST_TOPIC_NAME));
+        assertEquals(2L, committedOffset());
+    }
+
+    @Test
+    public void testOnTriggerDemarcatorCommitsSkippedTombstoneOffset() throws Exception {
+        setConnectionService();
+        configureProcessor();
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.DEMARCATOR);
+        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, RECORD_DEMARCATOR);
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+
+        final long tombstoneOffset = 4L;
+        final ByteRecord valueRecord = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0, 0L, new ArrayList<>(), null, FIRST_RECORD_VALUE, 1);
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, tombstoneOffset, 0L, new ArrayList<>(), null, new byte[0], 1, true);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(valueRecord, tombstone)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 1);
+        final MockFlowFile flowFile = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).getFirst();
+        flowFile.assertContentEquals(FIRST_RECORD_VALUE);
+        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
+
+        assertEquals(tombstoneOffset, committedOffset());
+    }
+
+    @Test
+    public void testOnTriggerDemarcatorSkipsTombstoneOnlyPoll() throws InitializationException {
+        setConnectionService();
+        configureProcessor();
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.DEMARCATOR);
+        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, RECORD_DEMARCATOR);
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0, 0L, new ArrayList<>(), null, new byte[0], 1, true);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(tombstone)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 0);
+        assertEquals(1L, runner.getCounterValue("Records Received from " + TEST_TOPIC_NAME));
+    }
+
+    @Test
     public void testVerifySkipsTombstoneAndParsesFollowingRecord() throws Exception {
         final RecordReaderFactory readerFactory = recordReaderFactory();
         final RecordReader recordReader = mock(RecordReader.class);
@@ -444,6 +520,14 @@ class ConsumeKafkaTest {
                 .filter(result -> "Parse Records".equals(result.getVerificationStepName()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private long committedOffset() {
+        final ArgumentCaptor<PollingSummary> pollingSummaryCaptor = ArgumentCaptor.forClass(PollingSummary.class);
+        verify(kafkaConsumerService).commit(pollingSummaryCaptor.capture());
+        final OffsetSummary offsetSummary = pollingSummaryCaptor.getValue().getOffsets().get(new TopicPartitionSummary(TEST_TOPIC_NAME, FIRST_PARTITION));
+        assertNotNull(offsetSummary);
+        return offsetSummary.getOffset();
     }
 
     private void configureProcessor() {

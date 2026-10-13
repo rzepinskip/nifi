@@ -93,6 +93,7 @@ import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Queue;
@@ -127,8 +128,8 @@ import static org.apache.nifi.expression.ExpressionLanguageScope.NONE;
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_PARTITION, description = "The partition of the topic for a record or batch of records"),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOPIC, description = "The topic the for a record or batch of records"),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOMBSTONE, description = "Set to true when the Kafka record value is null and Processing Strategy is FLOW_FILE. "
-                + "A non-null empty value does not set this attribute when Processing Strategy is FLOW_FILE. "
-                + "When Processing Strategy is DEMARCATOR, the attribute is set when the bundled FlowFile content is empty. "
+                + "A non-null empty value does not set this attribute. "
+                + "When Processing Strategy is DEMARCATOR, a null value is skipped instead of setting this attribute. "
                 + "Processing Strategy RECORD skips a tombstone, so it does not write this attribute."),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, description = "The maximum value of the Kafka offset in batch of records")
 })
@@ -923,7 +924,8 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             case RECORD -> processInputRecords(context, session, offsetTracker, consumerRecords);
             case FLOW_FILE -> processInputFlowFile(session, offsetTracker, consumerRecords);
             case DEMARCATOR -> {
-                final Iterator<ByteRecord> demarcatedRecords = transformDemarcator(context, consumerRecords);
+                final Iterator<ByteRecord> recordsToBundle = new TombstoneSkippingIterator(consumerRecords, session, offsetTracker);
+                final Iterator<ByteRecord> demarcatedRecords = transformDemarcator(context, recordsToBundle);
                 processInputFlowFile(session, offsetTracker, demarcatedRecords);
             }
         }
@@ -1061,6 +1063,55 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             }
 
             return recordSize;
+        }
+    }
+
+    /**
+     * Omits Kafka tombstones from a demarcated bundle and still records them so their offsets are committed.
+     */
+    private static class TombstoneSkippingIterator implements Iterator<ByteRecord> {
+        private final Iterator<ByteRecord> iterator;
+        private final ProcessSession session;
+        private final OffsetTracker offsetTracker;
+        private ByteRecord nextRecord;
+
+        TombstoneSkippingIterator(final Iterator<ByteRecord> iterator, final ProcessSession session, final OffsetTracker offsetTracker) {
+            this.iterator = iterator;
+            this.session = session;
+            this.offsetTracker = offsetTracker;
+        }
+
+        @Override
+        public boolean hasNext() {
+            if (nextRecord != null) {
+                return true;
+            }
+
+            while (iterator.hasNext()) {
+                final ByteRecord record = iterator.next();
+                if (record.isTombstone()) {
+                    session.adjustCounter("Records Received from " + record.getTopic(), 1, false);
+                    offsetTracker.update(record);
+                    continue;
+                }
+
+                offsetTracker.trackOffset(record);
+                nextRecord = record;
+                return true;
+            }
+
+            return false;
+        }
+
+        @Override
+        public ByteRecord next() {
+            if (!hasNext()) {
+                throw new NoSuchElementException();
+            }
+
+            final ByteRecord record = nextRecord;
+            nextRecord = null;
+            return record;
         }
     }
 
