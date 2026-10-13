@@ -20,6 +20,7 @@ import org.apache.nifi.kafka.processors.common.HeaderValueConverter;
 import org.apache.nifi.kafka.processors.producer.wrapper.WrapperRecord;
 import org.apache.nifi.kafka.service.api.header.RecordHeader;
 import org.apache.nifi.kafka.service.api.record.ByteRecord;
+import org.apache.nifi.kafka.shared.attribute.KafkaFlowFileAttribute;
 import org.apache.nifi.serialization.SimpleRecordSchema;
 import org.apache.nifi.serialization.record.MapRecord;
 import org.apache.nifi.serialization.record.Record;
@@ -45,9 +46,20 @@ public class ConsumeWrapperRecord {
     public MapRecord toWrapperRecord(final ByteRecord consumerRecord,
                                      final Record record,
                                      final Tuple<RecordField, Object> tupleKey) {
+        return toRecord(consumerRecord, record, tupleKey, false);
+    }
+
+    public MapRecord toTombstoneRecord(final ByteRecord consumerRecord, final Tuple<RecordField, Object> tupleKey) {
+        return toRecord(consumerRecord, null, tupleKey, true);
+    }
+
+    private MapRecord toRecord(final ByteRecord consumerRecord,
+                               final Record record,
+                               final Tuple<RecordField, Object> tupleKey,
+                               final boolean tombstone) {
         final Tuple<RecordField, Object> tupleValue = toWrapperRecordValue(record);
         final Tuple<RecordField, Object> tupleHeaders = toWrapperRecordHeaders(consumerRecord);
-        final Tuple<RecordField, Object> tupleMetadata = toWrapperRecordMetadata(consumerRecord);
+        final Tuple<RecordField, Object> tupleMetadata = toWrapperRecordMetadata(consumerRecord, tombstone);
         final RecordSchema rootRecordSchema = tupleKey.getKey() == null
                 ? new SimpleRecordSchema(List.of(tupleValue.getKey(), tupleHeaders.getKey(), tupleMetadata.getKey()))
                 : new SimpleRecordSchema(List.of(tupleKey.getKey(), tupleValue.getKey(), tupleHeaders.getKey(), tupleMetadata.getKey()));
@@ -56,6 +68,7 @@ public class ConsumeWrapperRecord {
         if (tupleKey.getKey() != null) {
             recordValues.put(tupleKey.getKey().getFieldName(), tupleKey.getValue());
         }
+
         recordValues.put(tupleValue.getKey().getFieldName(), tupleValue.getValue());
         recordValues.put(tupleHeaders.getKey().getFieldName(), tupleHeaders.getValue());
         recordValues.put(tupleMetadata.getKey().getFieldName(), tupleMetadata.getValue());
@@ -81,17 +94,26 @@ public class ConsumeWrapperRecord {
     private static final RecordField FIELD_PARTITION = new RecordField(WrapperRecord.PARTITION, RecordFieldType.INT.getDataType());
     private static final RecordField FIELD_OFFSET = new RecordField(WrapperRecord.OFFSET, RecordFieldType.LONG.getDataType());
     private static final RecordField FIELD_TIMESTAMP = new RecordField(WrapperRecord.TIMESTAMP, RecordFieldType.TIMESTAMP.getDataType());
+    private static final RecordField FIELD_TOMBSTONE = new RecordField(
+            KafkaFlowFileAttribute.KAFKA_TOMBSTONE, RecordFieldType.BOOLEAN.getDataType());
     private static final RecordSchema SCHEMA_WRAPPER = new SimpleRecordSchema(List.of(
             FIELD_TOPIC, FIELD_PARTITION, FIELD_OFFSET, FIELD_TIMESTAMP));
+    private static final RecordSchema SCHEMA_TOMBSTONE = new SimpleRecordSchema(List.of(
+            FIELD_TOPIC, FIELD_PARTITION, FIELD_OFFSET, FIELD_TIMESTAMP, FIELD_TOMBSTONE));
 
-    private Tuple<RecordField, Object> toWrapperRecordMetadata(final ByteRecord consumerRecord) {
-        final RecordField recordField = new RecordField(WrapperRecord.METADATA, RecordFieldType.RECORD.getRecordDataType(SCHEMA_WRAPPER));
+    private Tuple<RecordField, Object> toWrapperRecordMetadata(final ByteRecord consumerRecord, final boolean tombstone) {
+        final RecordSchema schema = tombstone ? SCHEMA_TOMBSTONE : SCHEMA_WRAPPER;
+        final RecordField recordField = new RecordField(WrapperRecord.METADATA, RecordFieldType.RECORD.getRecordDataType(schema));
         final Map<String, Object> metadata = new HashMap<>();
         metadata.put(WrapperRecord.TOPIC, consumerRecord.getTopic());
         metadata.put(WrapperRecord.PARTITION, consumerRecord.getPartition());
         metadata.put(WrapperRecord.OFFSET, consumerRecord.getOffset());
         metadata.put(WrapperRecord.TIMESTAMP, consumerRecord.getTimestamp());
-        final Record record = new MapRecord(SCHEMA_WRAPPER, metadata);
+        if (tombstone) {
+            metadata.put(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE);
+        }
+
+        final Record record = new MapRecord(schema, metadata);
         return new Tuple<>(recordField, record);
     }
 }

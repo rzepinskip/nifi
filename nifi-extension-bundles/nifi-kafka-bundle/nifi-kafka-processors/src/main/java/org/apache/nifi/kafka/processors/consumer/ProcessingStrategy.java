@@ -28,7 +28,8 @@ public enum ProcessingStrategy implements DescribedValue {
     DEMARCATOR("Write one FlowFile for each batch of Kafka Records consumed (optionally grouped by Kafka key). "
             + "A null value is skipped and its offset is still committed. A non-null empty value is included in the bundle."),
 
-    RECORD("Write one FlowFile containing multiple Kafka Records consumed and processed with Record Reader and Record Writer");
+    RECORD("Write one FlowFile containing multiple Kafka Records consumed and processed with Record Reader and Record Writer. "
+            + "A null value is skipped and its offset is still committed, unless Preserve Tombstones is enabled with Output Strategy Use Wrapper or Inject Metadata.");
 
     private final String description;
 

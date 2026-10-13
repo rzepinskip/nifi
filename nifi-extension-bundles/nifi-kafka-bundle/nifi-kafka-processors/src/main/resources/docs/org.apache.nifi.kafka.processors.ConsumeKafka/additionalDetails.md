@@ -23,7 +23,7 @@ This processor offers multiple output strategies (configured via processor prope
 - 'Use Wrapper' emits FlowFile records containing the Kafka record key, value, and headers, as well as additional metadata from the Kafka record.
 - 'Inject Metadata' emits FlowFile records containing the Kafka record value into which a sub record field has been added to hold metadata, headers and key information.
 
-When Processing Strategy is RECORD, a Kafka tombstone (null value) is not written for any Output Strategy. It is skipped and offset is committed.
+When Processing Strategy is RECORD, a Kafka tombstone (null value) is skipped by default and its offset is committed. Output Strategy Use Wrapper or Inject Metadata can write that tombstone when Preserve Tombstones is true. A non-null empty value is still passed to the Record Reader.
 
 The record schema that is used when "Use Wrapper" is selected is as follows (in Avro format):
 
@@ -111,6 +111,47 @@ The record schema that is used when "Inject Metadata" is selected is as follows 
   ]
 }
 ```
+
+### Preserve Tombstones
+
+When Output Strategy is 'Use Wrapper' or 'Inject Metadata', Preserve Tombstones controls how a Kafka record with a null value is handled. The default is false: the tombstone is skipped and its offset is still committed. A non-null empty value is not a tombstone and is still passed to the Record Reader.
+
+When Preserve Tombstones is true, the Record Reader is not called. The tombstone is written as a record with an empty value and `kafka.tombstone` set to true in the metadata. Ordinary records keep their existing schema; the marker is present only on the tombstone record.
+
+Use Wrapper writes a null `value` and adds the marker to `metadata`:
+
+```json
+{
+  "key": "acct",
+  "value": null,
+  "headers": {},
+  "metadata": {
+    "topic": "accounts",
+    "partition": 0,
+    "offset": 1,
+    "timestamp": 0,
+    "kafka.tombstone": true
+  }
+}
+```
+
+Inject Metadata writes no payload fields and adds the marker to `kafkaMetadata`:
+
+```json
+{
+  "kafkaMetadata": {
+    "topic": "accounts",
+    "partition": 0,
+    "offset": 1,
+    "timestamp": 0,
+    "headers": {},
+    "key": "acct",
+    "kafka.tombstone": true
+  }
+}
+```
+
+The property is not available for Demarcator, Use Content as Value, or Inject Offset. Those strategies continue to skip tombstones.
 
 If the Output Strategy property is set to 'Use Wrapper' or 'Inject Metadata', an additional processor configuration property ('Key Format') is activated. This property is used to specify how the Kafka Record's key should be written out to the FlowFile. The possible values for 'Key Format' are as follows:
 

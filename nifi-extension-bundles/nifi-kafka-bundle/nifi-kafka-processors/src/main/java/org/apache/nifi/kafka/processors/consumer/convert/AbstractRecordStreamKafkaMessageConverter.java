@@ -58,7 +58,7 @@ public abstract class AbstractRecordStreamKafkaMessageConverter implements Kafka
     protected final OffsetTracker offsetTracker;
     protected final ComponentLog logger;
     protected final String brokerUri;
-    private final RecordGroupingStrategy recordGroupingStrategy;
+    protected final RecordGroupingStrategy recordGroupingStrategy;
 
     protected AbstractRecordStreamKafkaMessageConverter(
             final RecordReaderFactory readerFactory,
@@ -88,8 +88,7 @@ public abstract class AbstractRecordStreamKafkaMessageConverter implements Kafka
         while (consumerRecords.hasNext()) {
             final ByteRecord consumerRecord = consumerRecords.next();
             if (consumerRecord.isTombstone()) {
-                session.adjustCounter("Records Received from " + consumerRecord.getTopic(), 1, false);
-                offsetTracker.update(consumerRecord);
+                handleTombstone(session, consumerRecord);
                 continue;
             }
 
@@ -123,6 +122,14 @@ public abstract class AbstractRecordStreamKafkaMessageConverter implements Kafka
         }
 
         recordGroupingStrategy.finishAllGroups(session);
+    }
+
+    /**
+     * Skips a Kafka tombstone without invoking the Record Reader and still records it so its offset is committed.
+     */
+    protected void handleTombstone(final ProcessSession session, final ByteRecord consumerRecord) {
+        session.adjustCounter("Records Received from " + consumerRecord.getTopic(), 1, false);
+        offsetTracker.update(consumerRecord);
     }
 
     protected void handleParseFailure(final ProcessSession session, final ByteRecord consumerRecord, final Map<String, String> attributes, final byte[] value) {
