@@ -16,8 +16,13 @@
  */
 package org.apache.nifi.kafka.processors;
 
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.nifi.kafka.processors.consumer.ProcessingStrategy;
 import org.apache.nifi.kafka.service.api.consumer.AutoOffsetReset;
 import org.apache.nifi.kafka.shared.attribute.KafkaFlowFileAttribute;
@@ -32,9 +37,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
@@ -106,5 +114,48 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
         flowFile.assertAttributeEquals("bbb", "value");
         flowFile.assertAttributeNotExists("aaa");
         flowFile.assertAttributeNotExists("ccc");
+    }
+
+    @Test
+    void testProcessingStrategyFlowFileEmptyByteArray() throws InterruptedException, ExecutionException {
+        final String topic = UUID.randomUUID().toString();
+        final String groupId = topic.substring(0, topic.indexOf("-"));
+
+        runner.setProperty(ConsumeKafka.GROUP_ID, groupId);
+        runner.setProperty(ConsumeKafka.TOPICS, topic);
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.FLOW_FILE.getValue());
+
+        runner.run(1, false, true);
+
+        produceEmptyByteArray(topic);
+        while (runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()) {
+            runner.run(1, false, false);
+        }
+
+        runner.run(1, true, false);
+
+        final Iterator<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).iterator();
+        assertTrue(flowFiles.hasNext());
+
+        final MockFlowFile flowFile = flowFiles.next();
+        flowFile.assertContentEquals("");
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_PARTITION, Integer.toString(FIRST_PARTITION));
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, Long.toString(FIRST_OFFSET));
+        flowFile.assertAttributeExists(KafkaFlowFileAttribute.KAFKA_TIMESTAMP);
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, "true");
+    }
+
+    private void produceEmptyByteArray(final String topic) throws ExecutionException, InterruptedException {
+        final Properties properties = getKafkaProducerProperties();
+        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+
+        try (final KafkaProducer<String, byte[]> producer = new KafkaProducer<>(properties)) {
+            final ProducerRecord<String, byte[]> record = new ProducerRecord<>(topic, FIRST_PARTITION, "key-record", new byte[0]);
+            final Future<RecordMetadata> future = producer.send(record);
+            final RecordMetadata metadata = future.get();
+            assertEquals(topic, metadata.topic());
+            assertTrue(metadata.hasOffset());
+        }
     }
 }
