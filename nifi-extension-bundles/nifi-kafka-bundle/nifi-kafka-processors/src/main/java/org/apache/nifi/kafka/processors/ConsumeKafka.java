@@ -126,8 +126,10 @@ import static org.apache.nifi.expression.ExpressionLanguageScope.NONE;
                 + "in a batch of messages. The value of this timestamp depends on 'log.message.timestamp.type` kafka broker config (LOG_APPEND_TIME, CREATE_TIME, NO_TIMESTAMP_TYPE)"),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_PARTITION, description = "The partition of the topic for a record or batch of records"),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOPIC, description = "The topic the for a record or batch of records"),
-        @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOMBSTONE, description = "Set to true if the consumed message is a tombstone message "
-                + "and Processing Strategy is FLOW_FILE or DEMARCATOR; Processing Strategy RECORD skip tombstone so it does not write this attribute."),
+        @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOMBSTONE, description = "Set to true when the Kafka record value is null and Processing Strategy is FLOW_FILE. "
+                + "A non-null empty value does not set this attribute when Processing Strategy is FLOW_FILE. "
+                + "When Processing Strategy is DEMARCATOR, the attribute is set when the bundled FlowFile content is empty. "
+                + "Processing Strategy RECORD skips a tombstone, so it does not write this attribute."),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, description = "The maximum value of the Kafka offset in batch of records")
 })
 @InputRequirement(InputRequirement.Requirement.INPUT_FORBIDDEN)

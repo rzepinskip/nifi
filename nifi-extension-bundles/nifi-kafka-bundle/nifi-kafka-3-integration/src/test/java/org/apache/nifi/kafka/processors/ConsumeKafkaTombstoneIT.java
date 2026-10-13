@@ -147,7 +147,7 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_PARTITION, Integer.toString(FIRST_PARTITION));
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, Long.toString(FIRST_OFFSET));
         flowFile.assertAttributeExists(KafkaFlowFileAttribute.KAFKA_TIMESTAMP);
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, "true");
+        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
     }
 
     @Test
@@ -171,7 +171,7 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
         emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
         emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
         emptyFlowFile.assertContentEquals("");
-        emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
+        emptyFlowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
 
         final MockFlowFile nullFlowFile = flowFiles.get(1);
         nullFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);

@@ -22,7 +22,8 @@ import org.apache.nifi.components.DescribedValue;
  * Enumeration of supporting strategies for consuming and serializing Kafka Records
  */
 public enum ProcessingStrategy implements DescribedValue {
-    FLOW_FILE("Write one FlowFile for each Kafka Record consumed"),
+    FLOW_FILE("Write one FlowFile for each Kafka Record consumed. "
+            + "A null value is an empty FlowFile with kafka.tombstone set to true; a non-null empty value does not set that attribute."),
 
     DEMARCATOR("Write one FlowFile for each batch of Kafka Records consumed (optionally grouped by Kafka key)"),
 
