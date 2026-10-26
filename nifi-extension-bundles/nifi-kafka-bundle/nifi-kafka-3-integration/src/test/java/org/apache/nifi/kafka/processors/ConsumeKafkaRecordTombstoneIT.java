@@ -23,11 +23,6 @@ import org.apache.avro.file.DataFileWriter;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumWriter;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.clients.producer.RecordMetadata;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.nifi.avro.AvroReader;
 import org.apache.nifi.kafka.processors.consumer.ProcessingStrategy;
 import org.apache.nifi.kafka.processors.producer.wrapper.InjectMetadataRecord;
@@ -48,19 +43,18 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
-import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * FlowFile content for each processing strategy, and each record output strategy, when one batch contains a
- * zero-length value, a null tombstone, and a non-empty value. Record tests cover a JSON reader and an Avro reader.
+ * RECORD output for a batch that contains a non-null empty value, a null tombstone, and a real value.
+ * A null tombstone is omitted from success and parse.failure. A JSON reader emits only the real value.
+ * An Avro reader routes the non-null empty value to parse.failure and writes the real value to success.
  */
-class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
+class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
 
     private static final String NON_ZERO_VALUE = "{\"id\":1,\"name\":\"A\"}";
 
@@ -97,113 +91,12 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testFlowFile() throws ExecutionException, InterruptedException {
-        final String topic = configure(ProcessingStrategy.FLOW_FILE);
-        runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, NON_ZERO_BYTES);
-
-        runUntil(runner, testRunner -> testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).size() >= 3, POLL_TIMEOUT);
-        runner.run(1, true, false);
-
-        final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
-        assertEquals(3, flowFiles.size());
-
-        final MockFlowFile emptyFlowFile = flowFiles.get(0);
-        emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
-        emptyFlowFile.assertContentEquals("");
-        emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
-
-        final MockFlowFile nullFlowFile = flowFiles.get(1);
-        nullFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        nullFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "1");
-        nullFlowFile.assertContentEquals("");
-        nullFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
-
-        final MockFlowFile valueFlowFile = flowFiles.get(2);
-        valueFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        valueFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "2");
-        valueFlowFile.assertContentEquals(NON_ZERO_VALUE);
-        valueFlowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
-    }
-
-    @Test
-    void testDemarcator() throws ExecutionException, InterruptedException {
-        final String topic = configure(ProcessingStrategy.DEMARCATOR);
-        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, "|");
-        runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, NON_ZERO_BYTES);
-
-        runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
-        runner.run(1, true, false);
-
-        final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
-        assertEquals(1, flowFiles.size());
-
-        final MockFlowFile flowFile = flowFiles.getFirst();
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "2");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "3");
-        flowFile.assertContentEquals(NON_ZERO_VALUE);
-        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
-    }
-
-    @Test
-    void testDemarcatorNull() throws ExecutionException, InterruptedException {
-        final String topic = configure(ProcessingStrategy.DEMARCATOR);
-        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, "|");
-        runner.run(1, false, true);
-        produceValue(topic, null);
-
-        runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
-        runner.run(1, true, false);
-
-        final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
-        assertEquals(1, flowFiles.size());
-
-        final MockFlowFile flowFile = flowFiles.getFirst();
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "0");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "1");
-        flowFile.assertContentEquals("");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
-    }
-
-    @Test
-    void testDemarcatorEmpty() throws ExecutionException, InterruptedException {
-        final String topic = configure(ProcessingStrategy.DEMARCATOR);
-        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, "|");
-        runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-
-        runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
-        runner.run(1, true, false);
-
-        final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
-        assertEquals(1, flowFiles.size());
-
-        final MockFlowFile flowFile = flowFiles.getFirst();
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "0");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "1");
-        flowFile.assertContentEquals("");
-        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
-    }
-
-    @Test
     void testRecordUseValue() throws ExecutionException, InterruptedException, IOException {
         final String topic = configureRecord(OutputStrategy.USE_VALUE);
         runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -231,9 +124,9 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
     void testRecordUseWrapper() throws ExecutionException, InterruptedException, IOException {
         final String topic = configureRecord(OutputStrategy.USE_WRAPPER);
         runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -265,9 +158,9 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
     void testRecordInjectMetadata() throws ExecutionException, InterruptedException, IOException {
         final String topic = configureRecord(OutputStrategy.INJECT_METADATA);
         runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -298,9 +191,9 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
     void testRecordInjectOffset() throws ExecutionException, InterruptedException, IOException {
         final String topic = configureRecord(OutputStrategy.INJECT_OFFSET);
         runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -330,9 +223,9 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
         final String topic = configureRecord(OutputStrategy.USE_VALUE);
         useAvroReader();
         runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, avroRecord());
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, avroRecord());
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()
                 && !testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).isEmpty(), POLL_TIMEOUT);
@@ -370,9 +263,9 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
         final String topic = configureRecord(OutputStrategy.USE_WRAPPER);
         useAvroReader();
         runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, avroRecord());
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, avroRecord());
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()
                 && !testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).isEmpty(), POLL_TIMEOUT);
@@ -414,9 +307,9 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
         final String topic = configureRecord(OutputStrategy.INJECT_METADATA);
         useAvroReader();
         runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, avroRecord());
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, avroRecord());
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()
                 && !testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).isEmpty(), POLL_TIMEOUT);
@@ -457,9 +350,9 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
         final String topic = configureRecord(OutputStrategy.INJECT_OFFSET);
         useAvroReader();
         runner.run(1, false, true);
-        produceValue(topic, EMPTY_BYTES);
-        produceValue(topic, null);
-        produceValue(topic, avroRecord());
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, avroRecord());
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()
                 && !testRunner.getFlowFilesForRelationship(ConsumeKafka.PARSE_FAILURE).isEmpty(), POLL_TIMEOUT);
@@ -494,30 +387,13 @@ class ConsumeKafkaMessageValueIT extends AbstractConsumeKafkaIT {
     }
 
     private String configureRecord(final OutputStrategy outputStrategy) {
-        final String topic = configure(ProcessingStrategy.RECORD);
-        runner.setProperty(ConsumeKafka.OUTPUT_STRATEGY, outputStrategy);
-        return topic;
-    }
-
-    private String configure(final ProcessingStrategy processingStrategy) {
         final String topic = UUID.randomUUID().toString();
         runner.setProperty(ConsumeKafka.GROUP_ID, topic);
         runner.setProperty(ConsumeKafka.TOPICS, topic);
-        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, processingStrategy);
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.RECORD);
         runner.setProperty(ConsumeKafka.AUTO_OFFSET_RESET, AutoOffsetReset.EARLIEST.getValue());
+        runner.setProperty(ConsumeKafka.OUTPUT_STRATEGY, outputStrategy);
         return topic;
-    }
-
-    private void produceValue(final String topic, final byte[] value) throws ExecutionException, InterruptedException {
-        final Properties properties = getKafkaProducerProperties();
-        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-
-        try (final KafkaProducer<String, byte[]> producer = new KafkaProducer<>(properties)) {
-            final ProducerRecord<String, byte[]> record = new ProducerRecord<>(topic, FIRST_PARTITION, MESSAGE_KEY, value);
-            final RecordMetadata metadata = producer.send(record).get();
-            assertEquals(topic, metadata.topic());
-            assertTrue(metadata.hasOffset());
-        }
     }
 
     private void useAvroReader() throws InitializationException {

@@ -34,6 +34,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
@@ -50,6 +51,16 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
     private static final int FIRST_PARTITION = 0;
 
     private static final long FIRST_OFFSET = 0;
+
+    private static final String NON_ZERO_VALUE = "{\"id\":1,\"name\":\"A\"}";
+
+    private static final byte[] NON_ZERO_BYTES = NON_ZERO_VALUE.getBytes(StandardCharsets.UTF_8);
+
+    private static final byte[] EMPTY_BYTES = new byte[0];
+
+    private static final String MESSAGE_KEY = "key";
+
+    private static final Duration POLL_TIMEOUT = Duration.ofSeconds(30);
 
     private TestRunner runner;
 
@@ -144,6 +155,42 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, Long.toString(FIRST_OFFSET));
         flowFile.assertAttributeExists(KafkaFlowFileAttribute.KAFKA_TIMESTAMP);
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, "true");
+    }
+
+    @Test
+    void testFlowFile() throws ExecutionException, InterruptedException {
+        final String topic = UUID.randomUUID().toString();
+        runner.setProperty(ConsumeKafka.GROUP_ID, topic);
+        runner.setProperty(ConsumeKafka.TOPICS, topic);
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.FLOW_FILE);
+        runner.run(1, false, true);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
+
+        runUntil(runner, testRunner -> testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).size() >= 3, POLL_TIMEOUT);
+        runner.run(1, true, false);
+
+        final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
+        assertEquals(3, flowFiles.size());
+
+        final MockFlowFile emptyFlowFile = flowFiles.get(0);
+        emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
+        emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
+        emptyFlowFile.assertContentEquals("");
+        emptyFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
+
+        final MockFlowFile nullFlowFile = flowFiles.get(1);
+        nullFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
+        nullFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "1");
+        nullFlowFile.assertContentEquals("");
+        nullFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE.toString());
+
+        final MockFlowFile valueFlowFile = flowFiles.get(2);
+        valueFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
+        valueFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "2");
+        valueFlowFile.assertContentEquals(NON_ZERO_VALUE);
+        valueFlowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
     }
 
     private void produceEmptyByteArray(final String topic) throws ExecutionException, InterruptedException {
