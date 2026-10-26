@@ -40,9 +40,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class ConsumeKafkaDemarcatorTombstoneIT extends AbstractConsumeKafkaIT {
 
-    private static final String NON_ZERO_VALUE = "{\"id\":1,\"name\":\"A\"}";
+    private static final String NON_EMPTY_VALUE = "{\"id\":1,\"name\":\"A\"}";
 
-    private static final byte[] NON_ZERO_BYTES = NON_ZERO_VALUE.getBytes(StandardCharsets.UTF_8);
+    private static final byte[] NON_EMPTY_BYTES = NON_EMPTY_VALUE.getBytes(StandardCharsets.UTF_8);
 
     private static final byte[] EMPTY_BYTES = new byte[0];
 
@@ -68,7 +68,7 @@ class ConsumeKafkaDemarcatorTombstoneIT extends AbstractConsumeKafkaIT {
         runner.run(1, false, true);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
-        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_EMPTY_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -81,7 +81,7 @@ class ConsumeKafkaDemarcatorTombstoneIT extends AbstractConsumeKafkaIT {
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "2");
         flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "3");
-        flowFile.assertContentEquals(NON_ZERO_VALUE);
+        flowFile.assertContentEquals(NON_EMPTY_VALUE);
         flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
     }
 

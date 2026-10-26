@@ -23,6 +23,8 @@ This processor offers multiple output strategies (configured via processor prope
 - 'Use Wrapper' emits FlowFile records containing the Kafka record key, value, and headers, as well as additional metadata from the Kafka record.
 - 'Inject Metadata' emits FlowFile records containing the Kafka record value into which a sub record field has been added to hold metadata, headers and key information.
 
+When Processing Strategy is RECORD, a Kafka tombstone (null value) is not written for any Output Strategy. It is skipped and offset is committed.
+
 The record schema that is used when "Use Wrapper" is selected is as follows (in Avro format):
 
 ```json

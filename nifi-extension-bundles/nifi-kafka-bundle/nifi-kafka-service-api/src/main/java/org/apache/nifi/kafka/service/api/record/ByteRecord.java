@@ -23,7 +23,8 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Byte Record translation of Kafka Record with byte arrays for key and value properties
+ * Byte Record translation of Kafka Record with byte arrays for key and value properties.
+ * Kafka tombstone is represented by {@code tombstone == true} and an empty {@code value} array.
  */
 public class ByteRecord {
 

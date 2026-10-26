@@ -17,6 +17,7 @@
 package org.apache.nifi.kafka.processors.consumer.convert;
 
 import org.apache.nifi.flowfile.FlowFile;
+import org.apache.nifi.kafka.processors.ConsumeKafka;
 import org.apache.nifi.kafka.processors.consumer.KafkaMetricName;
 import org.apache.nifi.kafka.processors.consumer.OffsetTracker;
 import org.apache.nifi.kafka.service.api.record.ByteRecord;
@@ -24,6 +25,7 @@ import org.apache.nifi.kafka.shared.attribute.KafkaFlowFileAttribute;
 import org.apache.nifi.kafka.shared.property.KeyEncoding;
 import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.processor.ProcessSession;
+import org.apache.nifi.processor.io.OutputStreamCallback;
 import org.apache.nifi.processor.metrics.CommitTiming;
 import org.apache.nifi.serialization.MalformedRecordException;
 import org.apache.nifi.serialization.RecordReaderFactory;
@@ -188,7 +190,7 @@ class RecordStreamKafkaMessageConverterTest {
         final FlowFile flowFile = new MockFlowFile(1);
         when(session.create()).thenReturn(flowFile);
         when(session.putAllAttributes(any(FlowFile.class), any())).thenReturn(flowFile);
-        when(session.write(any(FlowFile.class))).thenReturn(mock(OutputStream.class));
+        when(session.write(any(FlowFile.class), any(OutputStreamCallback.class))).thenReturn(flowFile);
 
         final RecordStreamKafkaMessageConverter converter = new RecordStreamKafkaMessageConverter(
                 readerFactory,
@@ -208,6 +210,7 @@ class RecordStreamKafkaMessageConverterTest {
         converter.toFlowFiles(session, List.of(tombstone, emptyValue).iterator());
 
         verify(readerFactory, times(1)).createRecordReader(any(), any(), anyLong(), any());
+        verify(session).transfer(flowFile, ConsumeKafka.PARSE_FAILURE);
         verify(session, times(2)).adjustCounter(eq("Records Received from " + FIRST_TOPIC), eq(1L), eq(false));
         assertEquals(2L, tombstoneOffsetTracker.getRecordCounts().get(FIRST_TOPIC));
     }

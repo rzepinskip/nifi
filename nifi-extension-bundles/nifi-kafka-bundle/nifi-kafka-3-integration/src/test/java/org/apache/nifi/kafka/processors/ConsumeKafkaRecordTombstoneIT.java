@@ -56,9 +56,9 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
  */
 class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
 
-    private static final String NON_ZERO_VALUE = "{\"id\":1,\"name\":\"A\"}";
+    private static final String NON_EMPTY_VALUE = "{\"id\":1,\"name\":\"A\"}";
 
-    private static final byte[] NON_ZERO_BYTES = NON_ZERO_VALUE.getBytes(StandardCharsets.UTF_8);
+    private static final byte[] NON_EMPTY_BYTES = NON_EMPTY_VALUE.getBytes(StandardCharsets.UTF_8);
 
     private static final byte[] EMPTY_BYTES = new byte[0];
 
@@ -91,12 +91,12 @@ class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testRecordUseValue() throws ExecutionException, InterruptedException, IOException {
+    void testOutputStrategyUseValue() throws ExecutionException, InterruptedException, IOException {
         final String topic = configureRecord(OutputStrategy.USE_VALUE);
         runner.run(1, false, true);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
-        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_EMPTY_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -121,12 +121,12 @@ class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testRecordUseWrapper() throws ExecutionException, InterruptedException, IOException {
+    void testOutputStrategyUseWrapper() throws ExecutionException, InterruptedException, IOException {
         final String topic = configureRecord(OutputStrategy.USE_WRAPPER);
         runner.run(1, false, true);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
-        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_EMPTY_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -155,12 +155,12 @@ class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testRecordInjectMetadata() throws ExecutionException, InterruptedException, IOException {
+    void testOutputStrategyInjectMetadata() throws ExecutionException, InterruptedException, IOException {
         final String topic = configureRecord(OutputStrategy.INJECT_METADATA);
         runner.run(1, false, true);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
-        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_EMPTY_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -188,12 +188,12 @@ class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testRecordInjectOffset() throws ExecutionException, InterruptedException, IOException {
+    void testOutputStrategyInjectOffset() throws ExecutionException, InterruptedException, IOException {
         final String topic = configureRecord(OutputStrategy.INJECT_OFFSET);
         runner.run(1, false, true);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
-        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_EMPTY_BYTES);
 
         runUntil(runner, testRunner -> !testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty(), POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -219,7 +219,7 @@ class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testRecordAvroUseValue() throws ExecutionException, InterruptedException, IOException, InitializationException {
+    void testOutputStrategyUseValueWithAvroReader() throws ExecutionException, InterruptedException, IOException, InitializationException {
         final String topic = configureRecord(OutputStrategy.USE_VALUE);
         useAvroReader();
         runner.run(1, false, true);
@@ -259,7 +259,7 @@ class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testRecordAvroUseWrapper() throws ExecutionException, InterruptedException, IOException, InitializationException {
+    void testOutputStrategyUseWrapperWithAvroReader() throws ExecutionException, InterruptedException, IOException, InitializationException {
         final String topic = configureRecord(OutputStrategy.USE_WRAPPER);
         useAvroReader();
         runner.run(1, false, true);
@@ -303,7 +303,7 @@ class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testRecordAvroInjectMetadata() throws ExecutionException, InterruptedException, IOException, InitializationException {
+    void testOutputStrategyInjectMetadataWithAvroReader() throws ExecutionException, InterruptedException, IOException, InitializationException {
         final String topic = configureRecord(OutputStrategy.INJECT_METADATA);
         useAvroReader();
         runner.run(1, false, true);
@@ -346,7 +346,7 @@ class ConsumeKafkaRecordTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testRecordAvroInjectOffset() throws ExecutionException, InterruptedException, IOException, InitializationException {
+    void testOutputStrategyInjectOffsetWithAvroReader() throws ExecutionException, InterruptedException, IOException, InitializationException {
         final String topic = configureRecord(OutputStrategy.INJECT_OFFSET);
         useAvroReader();
         runner.run(1, false, true);

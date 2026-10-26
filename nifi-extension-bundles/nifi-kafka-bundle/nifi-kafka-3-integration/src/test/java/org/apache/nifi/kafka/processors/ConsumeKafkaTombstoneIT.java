@@ -16,13 +16,8 @@
  */
 package org.apache.nifi.kafka.processors;
 
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.nifi.kafka.processors.consumer.ProcessingStrategy;
 import org.apache.nifi.kafka.service.api.consumer.AutoOffsetReset;
 import org.apache.nifi.kafka.shared.attribute.KafkaFlowFileAttribute;
@@ -38,10 +33,8 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -52,9 +45,9 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
 
     private static final long FIRST_OFFSET = 0;
 
-    private static final String NON_ZERO_VALUE = "{\"id\":1,\"name\":\"A\"}";
+    private static final String NON_EMPTY_VALUE = "{\"id\":1,\"name\":\"A\"}";
 
-    private static final byte[] NON_ZERO_BYTES = NON_ZERO_VALUE.getBytes(StandardCharsets.UTF_8);
+    private static final byte[] NON_EMPTY_BYTES = NON_EMPTY_VALUE.getBytes(StandardCharsets.UTF_8);
 
     private static final byte[] EMPTY_BYTES = new byte[0];
 
@@ -128,7 +121,7 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
     }
 
     @Test
-    void testProcessingStrategyFlowFileEmptyByteArray() throws InterruptedException, ExecutionException {
+    void testProcessingStrategyFlowFileEmptyRecord() throws InterruptedException, ExecutionException {
         final String topic = UUID.randomUUID().toString();
         final String groupId = topic.substring(0, topic.indexOf("-"));
 
@@ -138,7 +131,7 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
 
         runner.run(1, false, true);
 
-        produceEmptyByteArray(topic);
+        produceBytes(topic, FIRST_PARTITION, "key-record", EMPTY_BYTES);
         while (runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).isEmpty()) {
             runner.run(1, false, false);
         }
@@ -166,7 +159,7 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
         runner.run(1, false, true);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, EMPTY_BYTES);
         produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, null);
-        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_ZERO_BYTES);
+        produceBytes(topic, FIRST_PARTITION, MESSAGE_KEY, NON_EMPTY_BYTES);
 
         runUntil(runner, testRunner -> testRunner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).size() >= 3, POLL_TIMEOUT);
         runner.run(1, true, false);
@@ -189,20 +182,7 @@ class ConsumeKafkaTombstoneIT extends AbstractConsumeKafkaIT {
         final MockFlowFile valueFlowFile = flowFiles.get(2);
         valueFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_TOPIC, topic);
         valueFlowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "2");
-        valueFlowFile.assertContentEquals(NON_ZERO_VALUE);
+        valueFlowFile.assertContentEquals(NON_EMPTY_VALUE);
         valueFlowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
-    }
-
-    private void produceEmptyByteArray(final String topic) throws ExecutionException, InterruptedException {
-        final Properties properties = getKafkaProducerProperties();
-        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-
-        try (final KafkaProducer<String, byte[]> producer = new KafkaProducer<>(properties)) {
-            final ProducerRecord<String, byte[]> record = new ProducerRecord<>(topic, FIRST_PARTITION, "key-record", new byte[0]);
-            final Future<RecordMetadata> future = producer.send(record);
-            final RecordMetadata metadata = future.get();
-            assertEquals(topic, metadata.topic());
-            assertTrue(metadata.hasOffset());
-        }
     }
 }

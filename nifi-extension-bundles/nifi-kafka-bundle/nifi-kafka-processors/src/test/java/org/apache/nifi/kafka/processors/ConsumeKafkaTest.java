@@ -390,7 +390,7 @@ class ConsumeKafkaTest {
 
         final ConfigVerificationResult parseResult = parseResult(verifyRecords());
         assertEquals(Outcome.SUCCESSFUL, parseResult.getOutcome());
-        assertEquals("Successfully parsed 1 records and skipped 1 tombstone records", parseResult.getExplanation());
+        assertEquals("Successfully parsed 2 records (skipped 1 tombstones)", parseResult.getExplanation());
     }
 
     @Test
@@ -401,8 +401,23 @@ class ConsumeKafkaTest {
 
         final ConfigVerificationResult parseResult = parseResult(verifyRecords());
         assertEquals(Outcome.SUCCESSFUL, parseResult.getOutcome());
-        assertEquals("Skipped 1 tombstone records and received no data records to parse", parseResult.getExplanation());
+        assertEquals("Successfully parsed 1 records (skipped 1 tombstones)", parseResult.getExplanation());
         verify(readerFactory, never()).createRecordReader(any(), any(), anyLong(), any());
+    }
+
+    @Test
+    public void testVerifyReportsDataRecordWhenTombstonePrecedesParseFailure() throws Exception {
+        final RecordReaderFactory readerFactory = recordReaderFactory();
+        when(readerFactory.createRecordReader(any(), any(), anyLong(), any())).thenThrow(new IOException("empty value"));
+
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0L, 0L, List.of(), null, new byte[0], 1, true);
+        final ByteRecord dataRecord = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 1L, 0L, List.of(), null, FIRST_RECORD_VALUE, 1);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(tombstone, dataRecord));
+
+        final ConfigVerificationResult parseResult = parseResult(verifyRecords());
+        assertEquals(Outcome.FAILED, parseResult.getOutcome());
+        assertEquals("Failed to parse Record number 2: java.io.IOException: empty value", parseResult.getExplanation());
+        verify(readerFactory).createRecordReader(any(), any(), anyLong(), any());
     }
 
     private RecordReaderFactory recordReaderFactory() throws InitializationException {
