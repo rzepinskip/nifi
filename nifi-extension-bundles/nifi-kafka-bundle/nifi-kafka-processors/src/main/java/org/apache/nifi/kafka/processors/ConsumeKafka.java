@@ -127,10 +127,10 @@ import static org.apache.nifi.expression.ExpressionLanguageScope.NONE;
                 + "in a batch of messages. The value of this timestamp depends on 'log.message.timestamp.type` kafka broker config (LOG_APPEND_TIME, CREATE_TIME, NO_TIMESTAMP_TYPE)"),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_PARTITION, description = "The partition of the topic for a record or batch of records"),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOPIC, description = "The topic the for a record or batch of records"),
-        @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOMBSTONE, description = "Set to true when the Kafka record value is null and Processing Strategy is FLOW_FILE. "
+        @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOMBSTONE, description = "Set to true only when Processing Strategy is FLOW_FILE and the Kafka value is null. "
                 + "A non-null empty value does not set this attribute. "
-                + "When Processing Strategy is DEMARCATOR, a null value is skipped instead of setting this attribute. "
-                + "Processing Strategy RECORD skips a tombstone, so it does not write this attribute."),
+                + "DEMARCATOR omits a null value and does not set this attribute. "
+                + "RECORD never sets this FlowFile attribute. When Preserve Tombstones is true, Use Wrapper and Inject Metadata write kafka.tombstone in the record metadata."),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, description = "The maximum value of the Kafka offset in batch of records")
 })
 @InputRequirement(InputRequirement.Requirement.INPUT_FORBIDDEN)
@@ -290,8 +290,9 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
     static final PropertyDescriptor PRESERVE_TOMBSTONES = new PropertyDescriptor.Builder()
             .name("Preserve Tombstones")
             .description("""
-                    When true, a Kafka record with a null value is written with an empty value and kafka.tombstone set to true in the record metadata.
-                    When false, the tombstone is skipped and its offset is still committed. A non-null empty value is not a tombstone.
+                    When true, the value Record Reader is not called. Use Wrapper writes value as null and sets metadata.kafka.tombstone to true. \
+                    Inject Metadata writes a record whose only field is kafkaMetadata, with kafka.tombstone true inside it. The marker is not a FlowFile attribute. \
+                    Key Format still applies. When false, the null value is skipped and its offset is still committed. A non-null empty value is not a tombstone and is passed to the Record Reader.
                     """)
             .required(true)
             .allowableValues("true", "false")
@@ -362,8 +363,8 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
 
     public static final Relationship PARSE_FAILURE = new Relationship.Builder()
             .name("parse failure")
-            .description("When Processing Strategy is RECORD, a Kafka message that is not a tombstone and cannot be parsed or written with the configured Record Reader "
-                    + "or Record Writer is routed here. A tombstone (null value) is not routed here.")
+            .description("When Processing Strategy is RECORD, a message that cannot be parsed or written is routed here. "
+                    + "A null value is not routed here when it is skipped. When Preserve Tombstones is true, a null value whose key cannot be read or whose record cannot be written is routed here.")
             .build();
 
     private static final List<PropertyDescriptor> PROPERTY_DESCRIPTORS = List.of(
@@ -813,6 +814,7 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
         }
 
         final RecordReaderFactory readerFactory = context.getProperty(RECORD_READER).asControllerService(RecordReaderFactory.class);
+        final boolean preserveTombstones = writingPreservedTombstones(context);
         int recordIndex = 0;
         int skippedTombstones = 0;
         for (final ByteRecord byteRecord : records) {
@@ -850,8 +852,31 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
         return new ConfigVerificationResult.Builder()
             .verificationStepName("Parse Records")
             .outcome(Outcome.SUCCESSFUL)
-            .explanation("Successfully parsed " + recordIndex + " records (skipped " + skippedTombstones + " tombstones)")
+            .explanation(parseExplanation(recordIndex, parsedRecords, skippedTombstones, preserveTombstones))
             .build();
+    }
+
+    private static boolean writingPreservedTombstones(final ProcessContext context) {
+        final OutputStrategy selectedOutputStrategy = context.getProperty(OUTPUT_STRATEGY).asAllowableValue(OutputStrategy.class);
+        if (selectedOutputStrategy != OutputStrategy.USE_WRAPPER && selectedOutputStrategy != OutputStrategy.INJECT_METADATA) {
+            return false;
+        }
+
+        return context.getProperty(PRESERVE_TOMBSTONES).asBoolean();
+    }
+
+    private static String parseExplanation(final int recordIndex, final int parsedRecords, final int skippedTombstones, final boolean preserveTombstones) {
+        if (preserveTombstones && skippedTombstones > 0 && parsedRecords == 0) {
+            return "Did not pass " + skippedTombstones
+                    + " null values to the Record Reader; Preserve Tombstones writes those records with kafka.tombstone in the record metadata";
+        }
+
+        if (preserveTombstones && skippedTombstones > 0) {
+            return "Successfully parsed " + parsedRecords + " records (" + skippedTombstones
+                    + " null values are written with kafka.tombstone in the record metadata)";
+        }
+
+        return "Successfully parsed " + recordIndex + " records (skipped " + skippedTombstones + " tombstones)";
     }
 
     @ConnectorMethod(

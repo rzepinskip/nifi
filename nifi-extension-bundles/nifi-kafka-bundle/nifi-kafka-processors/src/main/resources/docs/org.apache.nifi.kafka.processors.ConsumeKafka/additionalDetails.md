@@ -116,7 +116,7 @@ The record schema that is used when "Inject Metadata" is selected is as follows 
 
 When Output Strategy is 'Use Wrapper' or 'Inject Metadata', Preserve Tombstones controls how a Kafka record with a null value is handled. The default is false: the tombstone is skipped and its offset is still committed. A non-null empty value is not a tombstone and is still passed to the Record Reader.
 
-When Preserve Tombstones is true, the Record Reader is not called. The tombstone is written as a record with an empty value and `kafka.tombstone` set to true in the metadata. Ordinary records keep their existing schema; the marker is present only on the tombstone record.
+When Preserve Tombstones is true, the value Record Reader is not called. Use Wrapper writes `value` as null and sets `metadata.kafka.tombstone` to true. Inject Metadata writes a record whose only field is `kafkaMetadata`, with `kafka.tombstone` true inside it. The marker is not a FlowFile attribute. Key Format still applies. Ordinary records keep their existing schema; the marker is present only on the tombstone record. Because that schema differs from ordinary records, Schema Conflict Resolution Create New FlowFile writes the tombstone to a separate FlowFile. Continue with Merged Schema merges it into the same FlowFile.
 
 Use Wrapper writes a null `value` and adds the marker to `metadata`:
 
@@ -144,14 +144,14 @@ Inject Metadata writes no payload fields and adds the marker to `kafkaMetadata`:
     "partition": 0,
     "offset": 1,
     "timestamp": 0,
-    "headers": {},
     "key": "acct",
+    "headers": {},
     "kafka.tombstone": true
   }
 }
 ```
 
-The property is not available for Demarcator, Use Content as Value, or Inject Offset. Those strategies continue to skip tombstones.
+Preserve Tombstones is available only when Processing Strategy is RECORD and Output Strategy is Use Wrapper or Inject Metadata. FLOW_FILE writes a null value as an empty FlowFile with the `kafka.tombstone` attribute set to true, and does not set that attribute for a non-null empty value. DEMARCATOR leaves a null value out of the bundle and still commits its offset; a non-null empty value stays in the bundle and does not set `kafka.tombstone`. Use Content as Value and Inject Offset skip a null value and still commit its offset.
 
 If the Output Strategy property is set to 'Use Wrapper' or 'Inject Metadata', an additional processor configuration property ('Key Format') is activated. This property is used to specify how the Kafka Record's key should be written out to the FlowFile. The possible values for 'Key Format' are as follows:
 

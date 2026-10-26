@@ -31,6 +31,7 @@ import org.apache.nifi.serialization.WriteResult;
 import org.apache.nifi.serialization.record.Record;
 import org.apache.nifi.serialization.record.RecordSchema;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.HashMap;
@@ -73,48 +74,61 @@ public class CreateNewFlowFileGrouping implements RecordGroupingStrategy {
 
         final RecordGroupCriteria criteria = new RecordGroupCriteria(writeSchema, groupingAttributes, topic, partition);
         RecordGroup group = recordGroups.get(criteria);
-        if (group == null) {
-            FlowFile ff = session.create();
-            ff = session.putAllAttributes(ff, Map.of(
+        final boolean createdGroup = group == null;
+        if (createdGroup) {
+            FlowFile flowFile = session.create();
+            flowFile = session.putAllAttributes(flowFile, Map.of(
                     KafkaFlowFileAttribute.KAFKA_TOPIC, topic,
                     KafkaFlowFileAttribute.KAFKA_PARTITION, String.valueOf(partition)));
 
-            final OutputStream out = session.write(ff);
+            final OutputStream out = session.write(flowFile);
             final RecordSetWriter writer;
             try {
                 writer = writerFactory.createWriter(logger, writeSchema, out, attributes);
                 writer.beginRecordSet();
             } catch (final IOException | SchemaNotFoundException ex) {
-                out.close();
+                closeQuietly(out, ex);
+                session.remove(flowFile);
                 throw ex;
             }
 
             final long offset = consumerRecord.getOffset();
-            final AtomicLong maxOffset = new AtomicLong(offset);
-            final AtomicLong minOffset = new AtomicLong(offset);
-            final AtomicLong minTimestamp = new AtomicLong(consumerRecord.getTimestamp());
-            group = new RecordGroup(ff, writer, maxOffset, minOffset, minTimestamp);
+            group = new RecordGroup(flowFile, writer, new AtomicLong(offset), new AtomicLong(offset), new AtomicLong(consumerRecord.getTimestamp()));
             recordGroups.put(criteria, group);
-        } else {
-            final long recordOffset = consumerRecord.getOffset();
-            final AtomicLong maxOffset = group.maxOffset();
-            if (recordOffset > maxOffset.get()) {
-                maxOffset.set(recordOffset);
-            }
-
-            final AtomicLong minOffset = group.minOffset();
-            if (recordOffset < minOffset.get()) {
-                minOffset.set(recordOffset);
-            }
-
-            final long recordTimestamp = consumerRecord.getTimestamp();
-            final AtomicLong minTimestamp = group.minTimestamp();
-            if (recordTimestamp < minTimestamp.get()) {
-                minTimestamp.set(recordTimestamp);
-            }
         }
 
-        group.writer().write(recordToWrite);
+        try {
+            group.writer().write(recordToWrite);
+        } catch (final IOException ex) {
+            if (createdGroup) {
+                recordGroups.remove(criteria);
+                closeQuietly(group.writer(), ex);
+                session.remove(group.flowFile());
+            }
+
+            throw ex;
+        }
+
+        if (createdGroup) {
+            return;
+        }
+
+        final long recordOffset = consumerRecord.getOffset();
+        final AtomicLong maxOffset = group.maxOffset();
+        if (recordOffset > maxOffset.get()) {
+            maxOffset.set(recordOffset);
+        }
+
+        final AtomicLong minOffset = group.minOffset();
+        if (recordOffset < minOffset.get()) {
+            minOffset.set(recordOffset);
+        }
+
+        final long recordTimestamp = consumerRecord.getTimestamp();
+        final AtomicLong minTimestamp = group.minTimestamp();
+        if (recordTimestamp < minTimestamp.get()) {
+            minTimestamp.set(recordTimestamp);
+        }
     }
 
     @Override
@@ -162,5 +176,13 @@ public class CreateNewFlowFileGrouping implements RecordGroupingStrategy {
     }
 
     private record RecordGroup(FlowFile flowFile, RecordSetWriter writer, AtomicLong maxOffset, AtomicLong minOffset, AtomicLong minTimestamp) {
+    }
+
+    private static void closeQuietly(final Closeable closeable, final Exception failure) {
+        try {
+            closeable.close();
+        } catch (final IOException closeFailure) {
+            failure.addSuppressed(closeFailure);
+        }
     }
 }
