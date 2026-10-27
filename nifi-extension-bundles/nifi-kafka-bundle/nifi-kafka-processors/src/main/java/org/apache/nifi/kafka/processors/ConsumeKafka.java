@@ -93,7 +93,6 @@ import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Queue;
@@ -967,22 +966,40 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             case RECORD -> processInputRecords(context, session, offsetTracker, consumerRecords);
             case FLOW_FILE -> processInputFlowFile(session, offsetTracker, consumerRecords);
             case DEMARCATOR -> {
-                final Iterator<ByteRecord> recordsToBundle = new TombstoneSkippingIterator(consumerRecords, session, offsetTracker);
-                final Iterator<ByteRecord> demarcatedRecords = transformDemarcator(context, recordsToBundle);
+                final Iterator<ByteRecord> demarcatedRecords = transformDemarcator(context, session, offsetTracker, consumerRecords);
                 processInputFlowFile(session, offsetTracker, demarcatedRecords);
             }
         }
     }
 
-    private Iterator<ByteRecord> transformDemarcator(final ProcessContext context, final Iterator<ByteRecord> consumerRecords) {
+    /**
+     * Skips Kafka tombstones (counting them and tracking their offsets) and demarcates the remaining records into bundles.
+     * A null Message Demarcator passes the filtered records through unbundled.
+     */
+    private Iterator<ByteRecord> transformDemarcator(
+            final ProcessContext context, final ProcessSession session, final OffsetTracker offsetTracker, final Iterator<ByteRecord> consumerRecords) {
+        final List<ByteRecord> recordsToBundle = new ArrayList<>();
+        while (consumerRecords.hasNext()) {
+            final ByteRecord consumerRecord = consumerRecords.next();
+            if (consumerRecord.isTombstone()) {
+                session.adjustCounter("Records Received from " + consumerRecord.getTopic(), 1, false);
+                offsetTracker.update(consumerRecord);
+                continue;
+            }
+
+            offsetTracker.trackOffset(consumerRecord);
+            recordsToBundle.add(consumerRecord);
+        }
+
         final String demarcatorValue = context.getProperty(MESSAGE_DEMARCATOR).getValue();
         if (demarcatorValue == null) {
-            return consumerRecords;
+            return recordsToBundle.iterator();
         }
 
         final byte[] demarcator = demarcatorValue.getBytes(StandardCharsets.UTF_8);
         final boolean separateByKey = context.getProperty(SEPARATE_BY_KEY).asBoolean();
-        return new ByteRecordBundler(demarcator, separateByKey, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets).bundle(consumerRecords);
+        return new ByteRecordBundler(demarcator, separateByKey, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets)
+                .bundle(recordsToBundle.iterator());
     }
 
     private void processInputRecords(final ProcessContext context, final ProcessSession session, final OffsetTracker offsetTracker, final Iterator<ByteRecord> consumerRecords) {
@@ -1106,55 +1123,6 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             }
 
             return recordSize;
-        }
-    }
-
-    /**
-     * Omits Kafka tombstones from a demarcated bundle and still records them so their offsets are committed.
-     */
-    private static class TombstoneSkippingIterator implements Iterator<ByteRecord> {
-        private final Iterator<ByteRecord> iterator;
-        private final ProcessSession session;
-        private final OffsetTracker offsetTracker;
-        private ByteRecord nextRecord;
-
-        TombstoneSkippingIterator(final Iterator<ByteRecord> iterator, final ProcessSession session, final OffsetTracker offsetTracker) {
-            this.iterator = iterator;
-            this.session = session;
-            this.offsetTracker = offsetTracker;
-        }
-
-        @Override
-        public boolean hasNext() {
-            if (nextRecord != null) {
-                return true;
-            }
-
-            while (iterator.hasNext()) {
-                final ByteRecord record = iterator.next();
-                if (record.isTombstone()) {
-                    session.adjustCounter("Records Received from " + record.getTopic(), 1, false);
-                    offsetTracker.update(record);
-                    continue;
-                }
-
-                offsetTracker.trackOffset(record);
-                nextRecord = record;
-                return true;
-            }
-
-            return false;
-        }
-
-        @Override
-        public ByteRecord next() {
-            if (!hasNext()) {
-                throw new NoSuchElementException();
-            }
-
-            final ByteRecord record = nextRecord;
-            nextRecord = null;
-            return record;
         }
     }
 
