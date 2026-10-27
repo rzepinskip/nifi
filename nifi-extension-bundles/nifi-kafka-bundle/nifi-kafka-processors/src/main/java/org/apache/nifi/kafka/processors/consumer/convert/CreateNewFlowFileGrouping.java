@@ -73,62 +73,67 @@ public class CreateNewFlowFileGrouping implements RecordGroupingStrategy {
         final int partition = consumerRecord.getPartition();
 
         final RecordGroupCriteria criteria = new RecordGroupCriteria(writeSchema, groupingAttributes, topic, partition);
-        RecordGroup group = recordGroups.get(criteria);
-        final boolean createdGroup = group == null;
-        if (createdGroup) {
-            FlowFile flowFile = session.create();
-            flowFile = session.putAllAttributes(flowFile, Map.of(
-                    KafkaFlowFileAttribute.KAFKA_TOPIC, topic,
-                    KafkaFlowFileAttribute.KAFKA_PARTITION, String.valueOf(partition)));
-
-            final OutputStream out = session.write(flowFile);
-            final RecordSetWriter writer;
+        final RecordGroup existingGroup = recordGroups.get(criteria);
+        if (existingGroup == null) {
+            final RecordGroup group = createGroup(session, consumerRecord, writeSchema, attributes);
             try {
-                writer = writerFactory.createWriter(logger, writeSchema, out, attributes);
-                writer.beginRecordSet();
-            } catch (final IOException | SchemaNotFoundException ex) {
-                closeQuietly(out, ex);
-                session.remove(flowFile);
+                group.writer().write(recordToWrite);
+            } catch (final IOException ex) {
+                closeQuietly(group.writer(), ex);
+                session.remove(group.flowFile());
                 throw ex;
             }
 
-            final long offset = consumerRecord.getOffset();
-            group = new RecordGroup(flowFile, writer, new AtomicLong(offset), new AtomicLong(offset), new AtomicLong(consumerRecord.getTimestamp()));
             recordGroups.put(criteria, group);
-        }
-
-        try {
-            group.writer().write(recordToWrite);
-        } catch (final IOException ex) {
-            if (createdGroup) {
-                recordGroups.remove(criteria);
-                closeQuietly(group.writer(), ex);
-                session.remove(group.flowFile());
-            }
-
-            throw ex;
-        }
-
-        if (createdGroup) {
             return;
         }
 
+        existingGroup.writer().write(recordToWrite);
+
         final long recordOffset = consumerRecord.getOffset();
-        final AtomicLong maxOffset = group.maxOffset();
+        final AtomicLong maxOffset = existingGroup.maxOffset();
         if (recordOffset > maxOffset.get()) {
             maxOffset.set(recordOffset);
         }
 
-        final AtomicLong minOffset = group.minOffset();
+        final AtomicLong minOffset = existingGroup.minOffset();
         if (recordOffset < minOffset.get()) {
             minOffset.set(recordOffset);
         }
 
         final long recordTimestamp = consumerRecord.getTimestamp();
-        final AtomicLong minTimestamp = group.minTimestamp();
+        final AtomicLong minTimestamp = existingGroup.minTimestamp();
         if (recordTimestamp < minTimestamp.get()) {
             minTimestamp.set(recordTimestamp);
         }
+    }
+
+    private RecordGroup createGroup(
+            final ProcessSession session,
+            final ByteRecord consumerRecord,
+            final RecordSchema writeSchema,
+            final Map<String, String> attributes) throws IOException, SchemaNotFoundException {
+        final String topic = consumerRecord.getTopic();
+        final int partition = consumerRecord.getPartition();
+
+        FlowFile flowFile = session.create();
+        flowFile = session.putAllAttributes(flowFile, Map.of(
+                KafkaFlowFileAttribute.KAFKA_TOPIC, topic,
+                KafkaFlowFileAttribute.KAFKA_PARTITION, String.valueOf(partition)));
+
+        final OutputStream out = session.write(flowFile);
+        final RecordSetWriter writer;
+        try {
+            writer = writerFactory.createWriter(logger, writeSchema, out, attributes);
+            writer.beginRecordSet();
+        } catch (final IOException | SchemaNotFoundException ex) {
+            closeQuietly(out, ex);
+            session.remove(flowFile);
+            throw ex;
+        }
+
+        final long offset = consumerRecord.getOffset();
+        return new RecordGroup(flowFile, writer, new AtomicLong(offset), new AtomicLong(offset), new AtomicLong(consumerRecord.getTimestamp()));
     }
 
     @Override

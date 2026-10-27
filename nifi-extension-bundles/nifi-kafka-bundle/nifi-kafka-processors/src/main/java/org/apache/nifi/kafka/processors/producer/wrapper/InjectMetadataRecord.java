@@ -54,6 +54,7 @@ public class InjectMetadataRecord extends MapRecord {
     private static final RecordField FIELD_OFFSET = new RecordField(OFFSET, RecordFieldType.LONG.getDataType());
     private static final RecordField FIELD_TIMESTAMP = new RecordField(TIMESTAMP, RecordFieldType.TIMESTAMP.getDataType());
     private static final RecordField FIELD_HEADERS = new RecordField(HEADERS, RecordFieldType.MAP.getMapDataType(RecordFieldType.STRING.getDataType()));
+    private static final RecordField FIELD_TOMBSTONE = new RecordField(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, RecordFieldType.BOOLEAN.getDataType());
 
     private static RecordSchema toRecordSchema(final Record record, final String messageKeyField) {
         final Record recordKey = (Record) record.getValue(messageKeyField);
@@ -100,57 +101,50 @@ public class InjectMetadataRecord extends MapRecord {
     }
 
     public static RecordSchema toWrapperSchema(final RecordField fieldKey, final RecordSchema recordSchema) {
-        final RecordSchema metadataRecordSchema = fieldKey == null
-                ? new SimpleRecordSchema(List.of(FIELD_TOPIC, FIELD_PARTITION, FIELD_OFFSET, FIELD_TIMESTAMP, FIELD_HEADERS))
-                : new SimpleRecordSchema(List.of(FIELD_TOPIC, FIELD_PARTITION, FIELD_OFFSET, FIELD_TIMESTAMP, fieldKey, FIELD_HEADERS));
+        final RecordSchema metadataRecordSchema = new SimpleRecordSchema(toMetadataFields(fieldKey));
         final RecordField metadataField = new RecordField(METADATA, RecordFieldType.RECORD.getRecordDataType(metadataRecordSchema));
-        final List<RecordField> valueFields = recordSchema.getFields();
-        final List<RecordField> valueFieldsWithInjectedMetadata = new ArrayList<>(valueFields);
+        final List<RecordField> valueFieldsWithInjectedMetadata = new ArrayList<>(recordSchema.getFields());
         valueFieldsWithInjectedMetadata.add(metadataField);
         return new SimpleRecordSchema(valueFieldsWithInjectedMetadata);
     }
 
     public static MapRecord toWrapperRecord(final HeaderValueConverter headerValueConverter, final ByteRecord consumerRecord, final Record record, final Tuple<RecordField, Object> tupleKey) {
-        final RecordSchema schema = record.getSchema();
-        RecordSchema finalSchema = toWrapperSchema(tupleKey.getKey(), schema);
-
-        final Map<String, Object> valuesMetadata = new HashMap<>();
-        valuesMetadata.put(TOPIC, consumerRecord.getTopic());
-        valuesMetadata.put(PARTITION, consumerRecord.getPartition());
-        valuesMetadata.put(OFFSET, consumerRecord.getOffset());
-        valuesMetadata.put(TIMESTAMP, consumerRecord.getTimestamp());
-        if (tupleKey.getKey() != null) {
-            valuesMetadata.put(KEY, tupleKey.getValue());
-        }
-
-        final Map<String, Object> valuesHeaders = new HashMap<>();
-        for (RecordHeader header : consumerRecord.getHeaders()) {
-            valuesHeaders.put(header.key(), headerValueConverter.convert(header.value()));
-        }
-        valuesMetadata.put(HEADERS, valuesHeaders);
-
-        final Map<String, Object> valueMap = record.toMap();
-        final Map<String, Object> valueMapWithInjectedMetadata = new HashMap<>(valueMap);
-        valueMapWithInjectedMetadata.put(METADATA, valuesMetadata);
-
+        final RecordSchema finalSchema = toWrapperSchema(tupleKey.getKey(), record.getSchema());
+        final Map<String, Object> valueMapWithInjectedMetadata = new HashMap<>(record.toMap());
+        valueMapWithInjectedMetadata.put(METADATA, toMetadataValues(headerValueConverter, consumerRecord, tupleKey));
         return new MapRecord(finalSchema, valueMapWithInjectedMetadata);
     }
 
     public static MapRecord toTombstoneRecord(final HeaderValueConverter headerValueConverter, final ByteRecord consumerRecord, final Tuple<RecordField, Object> tupleKey) {
-        final RecordField tombstoneField = new RecordField(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, RecordFieldType.BOOLEAN.getDataType());
+        final List<RecordField> metadataFields = toMetadataFields(tupleKey.getKey());
+        metadataFields.add(FIELD_TOMBSTONE);
+        final RecordSchema metadataSchema = new SimpleRecordSchema(metadataFields);
+
+        final Map<String, Object> valuesMetadata = toMetadataValues(headerValueConverter, consumerRecord, tupleKey);
+        valuesMetadata.put(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE);
+
+        final Record metadataRecord = new MapRecord(metadataSchema, valuesMetadata);
+        final RecordField metadataField = new RecordField(METADATA, RecordFieldType.RECORD.getRecordDataType(metadataSchema));
+        final RecordSchema schema = new SimpleRecordSchema(List.of(metadataField));
+        return new MapRecord(schema, Map.of(METADATA, metadataRecord));
+    }
+
+    private static List<RecordField> toMetadataFields(final RecordField fieldKey) {
         final List<RecordField> metadataFields = new ArrayList<>();
         metadataFields.add(FIELD_TOPIC);
         metadataFields.add(FIELD_PARTITION);
         metadataFields.add(FIELD_OFFSET);
         metadataFields.add(FIELD_TIMESTAMP);
-        if (tupleKey.getKey() != null) {
-            metadataFields.add(tupleKey.getKey());
+        if (fieldKey != null) {
+            metadataFields.add(fieldKey);
         }
 
         metadataFields.add(FIELD_HEADERS);
-        metadataFields.add(tombstoneField);
-        final RecordSchema metadataSchema = new SimpleRecordSchema(metadataFields);
+        return metadataFields;
+    }
 
+    private static Map<String, Object> toMetadataValues(
+            final HeaderValueConverter headerValueConverter, final ByteRecord consumerRecord, final Tuple<RecordField, Object> tupleKey) {
         final Map<String, Object> valuesMetadata = new HashMap<>();
         valuesMetadata.put(TOPIC, consumerRecord.getTopic());
         valuesMetadata.put(PARTITION, consumerRecord.getPartition());
@@ -165,13 +159,6 @@ public class InjectMetadataRecord extends MapRecord {
             valuesHeaders.put(header.key(), headerValueConverter.convert(header.value()));
         }
         valuesMetadata.put(HEADERS, valuesHeaders);
-        valuesMetadata.put(KafkaFlowFileAttribute.KAFKA_TOMBSTONE, Boolean.TRUE);
-
-        final Record metadataRecord = new MapRecord(metadataSchema, valuesMetadata);
-        final RecordField metadataField = new RecordField(METADATA, RecordFieldType.RECORD.getRecordDataType(metadataSchema));
-        final RecordSchema schema = new SimpleRecordSchema(List.of(metadataField));
-        final Map<String, Object> values = new HashMap<>();
-        values.put(METADATA, metadataRecord);
-        return new MapRecord(schema, values);
+        return valuesMetadata;
     }
 }

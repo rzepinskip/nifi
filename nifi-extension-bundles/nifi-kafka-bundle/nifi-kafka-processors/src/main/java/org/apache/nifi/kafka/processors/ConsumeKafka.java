@@ -816,6 +816,7 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
         final RecordReaderFactory readerFactory = context.getProperty(RECORD_READER).asControllerService(RecordReaderFactory.class);
         final boolean preserveTombstones = writingPreservedTombstones(context);
         int recordIndex = 0;
+        int parsedRecords = 0;
         int skippedTombstones = 0;
         for (final ByteRecord byteRecord : records) {
             recordIndex++;
@@ -824,6 +825,7 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
                 continue;
             }
 
+            parsedRecords++;
             final Map<String, String> recordAttributes = KafkaUtils.toAttributes(
                 byteRecord, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets);
 

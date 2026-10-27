@@ -58,7 +58,7 @@ public abstract class AbstractRecordStreamKafkaMessageConverter implements Kafka
     protected final OffsetTracker offsetTracker;
     protected final ComponentLog logger;
     protected final String brokerUri;
-    protected final RecordGroupingStrategy recordGroupingStrategy;
+    private final RecordGroupingStrategy recordGroupingStrategy;
 
     protected AbstractRecordStreamKafkaMessageConverter(
             final RecordReaderFactory readerFactory,
@@ -87,34 +87,39 @@ public abstract class AbstractRecordStreamKafkaMessageConverter implements Kafka
     public void toFlowFiles(final ProcessSession session, final Iterator<ByteRecord> consumerRecords) {
         while (consumerRecords.hasNext()) {
             final ByteRecord consumerRecord = consumerRecords.next();
-            if (consumerRecord.isTombstone()) {
-                handleTombstone(session, consumerRecord);
-                continue;
-            }
-
-            final byte[] value = consumerRecord.getValue();
-
             final Map<String, String> attributes = KafkaUtils.toAttributes(
                     consumerRecord, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets);
-
             final Map<String, String> groupingAttributes = extractHeaders(consumerRecord);
 
-            try (final InputStream in = new ByteArrayInputStream(value);
-                    final RecordReader reader = readerFactory.createRecordReader(attributes, in, value.length, logger)) {
+            try {
+                if (consumerRecord.isTombstone()) {
+                    final Record tombstoneRecord = convertTombstone(consumerRecord, attributes);
+                    if (tombstoneRecord == null) {
+                        session.adjustCounter("Records Received from " + consumerRecord.getTopic(), 1, false);
+                    } else {
+                        final RecordSchema writeSchema = writerFactory.getSchema(attributes, tombstoneRecord.getSchema());
+                        recordGroupingStrategy.addRecord(session, consumerRecord, tombstoneRecord, writeSchema, attributes, groupingAttributes);
+                    }
+                } else {
+                    final byte[] value = consumerRecord.getValue();
+                    try (final InputStream in = new ByteArrayInputStream(value);
+                            final RecordReader reader = readerFactory.createRecordReader(attributes, in, value.length, logger)) {
 
-                Record record;
-                while ((record = reader.nextRecord()) != null) {
-                    final RecordSchema writeSchema = getWriteSchema(record.getSchema(), consumerRecord, attributes);
-                    final Record toWrite = convertRecord(consumerRecord, record, attributes);
-                    recordGroupingStrategy.addRecord(session, consumerRecord, toWrite, writeSchema, attributes, groupingAttributes);
+                        Record record;
+                        while ((record = reader.nextRecord()) != null) {
+                            final RecordSchema writeSchema = getWriteSchema(record.getSchema(), consumerRecord, attributes);
+                            final Record toWrite = convertRecord(consumerRecord, record, attributes);
+                            recordGroupingStrategy.addRecord(session, consumerRecord, toWrite, writeSchema, attributes, groupingAttributes);
+                        }
+                    }
                 }
             } catch (final MalformedRecordException | IOException | SchemaNotFoundException e) {
                 logger.debug("Reader or Writer failed to process Kafka Record with Topic [{}] Partition [{}] Offset [{}]",
                         consumerRecord.getTopic(), consumerRecord.getPartition(), consumerRecord.getOffset(), e);
-                handleParseFailure(session, consumerRecord, attributes, value);
+                handleParseFailure(session, consumerRecord, attributes, consumerRecord.getValue());
                 offsetTracker.update(consumerRecord);
                 continue;
-            } catch (Exception e) {
+            } catch (final Exception e) {
                 throw new RuntimeException("Failed to process Kafka message", e);
             }
 
@@ -125,11 +130,12 @@ public abstract class AbstractRecordStreamKafkaMessageConverter implements Kafka
     }
 
     /**
-     * Skips a Kafka tombstone without invoking the Record Reader and still records it so its offset is committed.
+     * Returns a record to write for a Kafka tombstone, or {@code null} when the tombstone should be skipped.
+     * The Record Reader is not invoked.
      */
-    protected void handleTombstone(final ProcessSession session, final ByteRecord consumerRecord) {
-        session.adjustCounter("Records Received from " + consumerRecord.getTopic(), 1, false);
-        offsetTracker.update(consumerRecord);
+    protected Record convertTombstone(final ByteRecord consumerRecord, final Map<String, String> attributes)
+            throws IOException, SchemaNotFoundException, MalformedRecordException {
+        return null;
     }
 
     protected void handleParseFailure(final ProcessSession session, final ByteRecord consumerRecord, final Map<String, String> attributes, final byte[] value) {

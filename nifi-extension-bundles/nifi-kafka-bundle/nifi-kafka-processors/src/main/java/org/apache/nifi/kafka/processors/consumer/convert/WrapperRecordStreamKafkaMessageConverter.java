@@ -17,7 +17,6 @@
 package org.apache.nifi.kafka.processors.consumer.convert;
 
 import org.apache.nifi.kafka.processors.common.HeaderValueConverter;
-import org.apache.nifi.kafka.processors.common.KafkaUtils;
 import org.apache.nifi.kafka.processors.consumer.OffsetTracker;
 import org.apache.nifi.kafka.processors.consumer.wrapper.ConsumeWrapperRecord;
 import org.apache.nifi.kafka.processors.consumer.wrapper.WrapperRecordKeyReader;
@@ -28,7 +27,6 @@ import org.apache.nifi.kafka.shared.property.KeyEncoding;
 import org.apache.nifi.kafka.shared.property.KeyFormat;
 import org.apache.nifi.kafka.shared.property.OutputStrategy;
 import org.apache.nifi.logging.ComponentLog;
-import org.apache.nifi.processor.ProcessSession;
 import org.apache.nifi.schema.access.SchemaNotFoundException;
 import org.apache.nifi.serialization.MalformedRecordException;
 import org.apache.nifi.serialization.RecordReaderFactory;
@@ -73,34 +71,19 @@ public class WrapperRecordStreamKafkaMessageConverter extends AbstractRecordStre
     }
 
     @Override
-    protected void handleTombstone(final ProcessSession session, final ByteRecord consumerRecord) {
+    protected Record convertTombstone(final ByteRecord consumerRecord, final Map<String, String> attributes)
+            throws IOException, SchemaNotFoundException, MalformedRecordException {
         if (!preserveTombstones) {
-            super.handleTombstone(session, consumerRecord);
-            return;
+            return null;
         }
 
-        final Map<String, String> attributes = KafkaUtils.toAttributes(
-                consumerRecord, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets);
-        final Map<String, String> groupingAttributes = extractHeaders(consumerRecord);
-        try {
-            final WrapperRecordKeyReader keyReader = new WrapperRecordKeyReader(keyFormat, keyReaderFactory, keyEncoding, logger);
-            final Tuple<RecordField, Object> recordKey = keyReader.toWrapperRecordKey(consumerRecord.getKey().orElse(null), attributes);
-            final Record tombstoneRecord = outputStrategy == OutputStrategy.USE_WRAPPER
-                    ? new ConsumeWrapperRecord(headerValueConverter).toTombstoneRecord(consumerRecord, recordKey)
-                    : InjectMetadataRecord.toTombstoneRecord(headerValueConverter, consumerRecord, recordKey);
-            final RecordSchema writeSchema = writerFactory.getSchema(attributes, tombstoneRecord.getSchema());
-            recordGroupingStrategy.addRecord(session, consumerRecord, tombstoneRecord, writeSchema, attributes, groupingAttributes);
-        } catch (final MalformedRecordException | IOException | SchemaNotFoundException e) {
-            logger.debug("Failed to preserve Kafka tombstone with Topic [{}] Partition [{}] Offset [{}]",
-                    consumerRecord.getTopic(), consumerRecord.getPartition(), consumerRecord.getOffset(), e);
-            handleParseFailure(session, consumerRecord, attributes, consumerRecord.getValue());
-            offsetTracker.update(consumerRecord);
-            return;
-        } catch (final Exception e) {
-            throw new RuntimeException("Failed to process Kafka message", e);
+        final WrapperRecordKeyReader keyReader = new WrapperRecordKeyReader(keyFormat, keyReaderFactory, keyEncoding, logger);
+        final Tuple<RecordField, Object> recordKey = keyReader.toWrapperRecordKey(consumerRecord.getKey().orElse(null), attributes);
+        if (outputStrategy == OutputStrategy.USE_WRAPPER) {
+            return new ConsumeWrapperRecord(headerValueConverter).toTombstoneRecord(consumerRecord, recordKey);
         }
 
-        offsetTracker.update(consumerRecord);
+        return InjectMetadataRecord.toTombstoneRecord(headerValueConverter, consumerRecord, recordKey);
     }
 
     @Override
