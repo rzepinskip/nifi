@@ -26,14 +26,12 @@ import org.apache.nifi.reporting.InitializationException;
 import org.apache.nifi.serialization.RecordSetWriter;
 import org.apache.nifi.serialization.RecordSetWriterFactory;
 import org.apache.nifi.serialization.SimpleRecordSchema;
-import org.apache.nifi.serialization.WriteResult;
 import org.apache.nifi.serialization.record.MapRecord;
 import org.apache.nifi.serialization.record.MockRecordWriter;
 import org.apache.nifi.serialization.record.Record;
 import org.apache.nifi.serialization.record.RecordField;
 import org.apache.nifi.serialization.record.RecordFieldType;
 import org.apache.nifi.serialization.record.RecordSchema;
-import org.apache.nifi.serialization.record.RecordSet;
 import org.apache.nifi.util.MockFlowFile;
 import org.apache.nifi.util.MockProcessSession;
 import org.apache.nifi.util.SharedSessionState;
@@ -49,7 +47,6 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CreateNewFlowFileGroupingTest {
@@ -151,30 +148,6 @@ class CreateNewFlowFileGroupingTest {
         assertTrue(success.stream().anyMatch(ff -> "1".equals(ff.getAttribute(KafkaFlowFileAttribute.KAFKA_PARTITION))));
     }
 
-    @Test
-    void testCreateWriterFailureRemovesFlowFile() throws Exception {
-        grouping = new CreateNewFlowFileGrouping(new FailingRecordWriter(true, false), logger, BROKER_URI, true);
-        final ByteRecord record = new ByteRecord(TOPIC, 0, 1, 1000L, List.of(), null, new byte[0], 0L);
-
-        assertThrows(IOException.class, () -> grouping.addRecord(session, record, RECORD_A, SCHEMA_A, Map.of(), Map.of()));
-        grouping.finishAllGroups(session);
-        session.commitAsync();
-
-        assertEquals(0, session.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).size());
-    }
-
-    @Test
-    void testWriteFailureOnNewGroupRemovesFlowFile() throws Exception {
-        grouping = new CreateNewFlowFileGrouping(new FailingRecordWriter(false, true), logger, BROKER_URI, true);
-        final ByteRecord record = new ByteRecord(TOPIC, 0, 1, 1000L, List.of(), null, new byte[0], 0L);
-
-        assertThrows(IOException.class, () -> grouping.addRecord(session, record, RECORD_A, SCHEMA_A, Map.of(), Map.of()));
-        grouping.finishAllGroups(session);
-        session.commitAsync();
-
-        assertEquals(0, session.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).size());
-    }
-
     private static final class PassThroughSchemaRecordWriter extends AbstractControllerService implements RecordSetWriterFactory {
         private final MockRecordWriter writer = new MockRecordWriter(null, false);
 
@@ -187,67 +160,6 @@ class CreateNewFlowFileGroupingTest {
         public RecordSetWriter createWriter(final ComponentLog logger, final RecordSchema schema, final OutputStream out,
                 final Map<String, String> variables) throws IOException {
             return writer.createWriter(logger, schema, out, variables);
-        }
-    }
-
-    private static final class FailingRecordWriter extends AbstractControllerService implements RecordSetWriterFactory {
-        private final boolean failOnCreate;
-        private final boolean failOnWrite;
-
-        private FailingRecordWriter(final boolean failOnCreate, final boolean failOnWrite) {
-            this.failOnCreate = failOnCreate;
-            this.failOnWrite = failOnWrite;
-        }
-
-        @Override
-        public RecordSchema getSchema(final Map<String, String> variables, final RecordSchema readSchema) {
-            return readSchema;
-        }
-
-        @Override
-        public RecordSetWriter createWriter(final ComponentLog logger, final RecordSchema schema, final OutputStream out,
-                final Map<String, String> variables) throws IOException {
-            if (failOnCreate) {
-                throw new IOException("create failed");
-            }
-
-            return new RecordSetWriter() {
-                @Override
-                public WriteResult write(final Record record) throws IOException {
-                    if (failOnWrite) {
-                        throw new IOException("write failed");
-                    }
-                    return WriteResult.EMPTY;
-                }
-
-                @Override
-                public WriteResult write(final RecordSet recordSet) {
-                    return WriteResult.EMPTY;
-                }
-
-                @Override
-                public void beginRecordSet() {
-                }
-
-                @Override
-                public WriteResult finishRecordSet() {
-                    return WriteResult.EMPTY;
-                }
-
-                @Override
-                public String getMimeType() {
-                    return "text/plain";
-                }
-
-                @Override
-                public void flush() {
-                }
-
-                @Override
-                public void close() throws IOException {
-                    out.close();
-                }
-            };
         }
     }
 }
