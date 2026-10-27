@@ -476,7 +476,7 @@ class ConsumeKafkaTest {
 
         final ConfigVerificationResult parseResult = parseResult(verifyRecords());
         assertEquals(Outcome.SUCCESSFUL, parseResult.getOutcome());
-        assertEquals("Successfully parsed 2 records (skipped 1 tombstones)", parseResult.getExplanation());
+        assertEquals("Successfully parsed 2 records", parseResult.getExplanation());
     }
 
     @Test
@@ -487,22 +487,7 @@ class ConsumeKafkaTest {
 
         final ConfigVerificationResult parseResult = parseResult(verifyRecords());
         assertEquals(Outcome.SUCCESSFUL, parseResult.getOutcome());
-        assertEquals("Successfully parsed 1 records (skipped 1 tombstones)", parseResult.getExplanation());
-        verify(readerFactory, never()).createRecordReader(any(), any(), anyLong(), any());
-    }
-
-    @Test
-    public void testVerifyPreserveTombstonesReportsWrittenNullValues() throws Exception {
-        final RecordReaderFactory readerFactory = recordReaderFactory();
-        runner.setProperty(ConsumeKafka.OUTPUT_STRATEGY, OutputStrategy.USE_WRAPPER);
-        runner.setProperty(ConsumeKafka.PRESERVE_TOMBSTONES, "true");
-        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0L, 0L, List.of(), null, new byte[0], 1, true);
-        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(tombstone));
-
-        final ConfigVerificationResult parseResult = parseResult(verifyRecords());
-        assertEquals(Outcome.SUCCESSFUL, parseResult.getOutcome());
-        assertEquals("Did not pass 1 null values to the Record Reader; Preserve Tombstones writes those records with kafka.tombstone in the record metadata",
-                parseResult.getExplanation());
+        assertEquals("Successfully parsed 1 records", parseResult.getExplanation());
         verify(readerFactory, never()).createRecordReader(any(), any(), anyLong(), any());
     }
 

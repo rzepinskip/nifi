@@ -813,18 +813,13 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
         }
 
         final RecordReaderFactory readerFactory = context.getProperty(RECORD_READER).asControllerService(RecordReaderFactory.class);
-        final boolean preserveTombstones = writingPreservedTombstones(context);
         int recordIndex = 0;
-        int parsedRecords = 0;
-        int skippedTombstones = 0;
         for (final ByteRecord byteRecord : records) {
             recordIndex++;
             if (byteRecord.isTombstone()) {
-                skippedTombstones++;
                 continue;
             }
 
-            parsedRecords++;
             final Map<String, String> recordAttributes = KafkaUtils.toAttributes(
                 byteRecord, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets);
 
@@ -846,38 +841,15 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             return new ConfigVerificationResult.Builder()
                 .verificationStepName("Parse Records")
                 .outcome(Outcome.SKIPPED)
-                .explanation("No records were received to parse (skipped " + skippedTombstones + " tombstones)")
+                .explanation("No records were received to parse")
                 .build();
         }
 
         return new ConfigVerificationResult.Builder()
             .verificationStepName("Parse Records")
             .outcome(Outcome.SUCCESSFUL)
-            .explanation(parseExplanation(recordIndex, parsedRecords, skippedTombstones, preserveTombstones))
+            .explanation("Successfully parsed " + recordIndex + " records")
             .build();
-    }
-
-    private static boolean writingPreservedTombstones(final ProcessContext context) {
-        final OutputStrategy selectedOutputStrategy = context.getProperty(OUTPUT_STRATEGY).asAllowableValue(OutputStrategy.class);
-        if (selectedOutputStrategy != OutputStrategy.USE_WRAPPER && selectedOutputStrategy != OutputStrategy.INJECT_METADATA) {
-            return false;
-        }
-
-        return context.getProperty(PRESERVE_TOMBSTONES).asBoolean();
-    }
-
-    private static String parseExplanation(final int recordIndex, final int parsedRecords, final int skippedTombstones, final boolean preserveTombstones) {
-        if (preserveTombstones && skippedTombstones > 0 && parsedRecords == 0) {
-            return "Did not pass " + skippedTombstones
-                    + " null values to the Record Reader; Preserve Tombstones writes those records with kafka.tombstone in the record metadata";
-        }
-
-        if (preserveTombstones && skippedTombstones > 0) {
-            return "Successfully parsed " + parsedRecords + " records (" + skippedTombstones
-                    + " null values are written with kafka.tombstone in the record metadata)";
-        }
-
-        return "Successfully parsed " + recordIndex + " records (skipped " + skippedTombstones + " tombstones)";
     }
 
     @ConnectorMethod(
