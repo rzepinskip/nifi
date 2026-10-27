@@ -126,8 +126,10 @@ import static org.apache.nifi.expression.ExpressionLanguageScope.NONE;
                 + "in a batch of messages. The value of this timestamp depends on 'log.message.timestamp.type` kafka broker config (LOG_APPEND_TIME, CREATE_TIME, NO_TIMESTAMP_TYPE)"),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_PARTITION, description = "The partition of the topic for a record or batch of records"),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOPIC, description = "The topic the for a record or batch of records"),
-        @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOMBSTONE, description = "Set to true if the consumed message is a tombstone message "
-                + "and Processing Strategy is FLOW_FILE or DEMARCATOR; Processing Strategy RECORD skip tombstone so it does not write this attribute."),
+        @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_TOMBSTONE, description = "Set to true only when Processing Strategy is FLOW_FILE and the Kafka value is null. "
+                + "A non-null empty value does not set this attribute. "
+                + "DEMARCATOR omits a null value and does not set this attribute. "
+                + "RECORD never sets this FlowFile attribute. When Preserve Tombstones is true, Use Wrapper and Inject Metadata write kafka.tombstone in the record metadata."),
         @WritesAttribute(attribute = KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, description = "The maximum value of the Kafka offset in batch of records")
 })
 @InputRequirement(InputRequirement.Requirement.INPUT_FORBIDDEN)
@@ -284,6 +286,19 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             .dependsOn(PROCESSING_STRATEGY, ProcessingStrategy.RECORD)
             .build();
 
+    static final PropertyDescriptor PRESERVE_TOMBSTONES = new PropertyDescriptor.Builder()
+            .name("Preserve Tombstones")
+            .description("""
+                    When true, the value Record Reader is not called. Use Wrapper writes value as null and sets metadata.kafka.tombstone to true. \
+                    Inject Metadata writes a record whose only field is kafkaMetadata, with kafka.tombstone true inside it. The marker is not a FlowFile attribute. \
+                    Key Format still applies. When false, the null value is skipped and its offset is still committed. A non-null empty value is not a tombstone and is passed to the Record Reader.
+                    """)
+            .required(true)
+            .allowableValues("true", "false")
+            .defaultValue("false")
+            .dependsOn(OUTPUT_STRATEGY, OutputStrategy.USE_WRAPPER, OutputStrategy.INJECT_METADATA)
+            .build();
+
     static final PropertyDescriptor SCHEMA_CONFLICT_RESOLUTION = new PropertyDescriptor.Builder()
             .name("Schema Conflict Resolution")
             .description("Specifies how records with different schemas are grouped into FlowFiles.")
@@ -347,8 +362,8 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
 
     public static final Relationship PARSE_FAILURE = new Relationship.Builder()
             .name("parse failure")
-            .description("When Processing Strategy is RECORD, a Kafka message that is not a tombstone and cannot be parsed or written with the configured Record Reader "
-                    + "or Record Writer is routed here. A tombstone (null value) is not routed here.")
+            .description("When Processing Strategy is RECORD, a message that cannot be parsed or written is routed here. "
+                    + "A null value is not routed here when it is skipped. When Preserve Tombstones is true, a null value whose key cannot be read or whose record cannot be written is routed here.")
             .build();
 
     private static final List<PropertyDescriptor> PROPERTY_DESCRIPTORS = List.of(
@@ -368,6 +383,7 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             RECORD_READER,
             RECORD_WRITER,
             OUTPUT_STRATEGY,
+            PRESERVE_TOMBSTONES,
             SCHEMA_CONFLICT_RESOLUTION,
             KEY_ATTRIBUTE_ENCODING,
             KEY_FORMAT,
@@ -387,6 +403,7 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
     private volatile OutputStrategy outputStrategy;
     private volatile SchemaConflictResolution schemaConflictResolution;
     private volatile KeyFormat keyFormat;
+    private volatile boolean preserveTombstones;
     private volatile boolean commitOffsets;
     private volatile boolean useReader;
     private volatile String brokerUri;
@@ -461,6 +478,8 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
         keyFormat = (outputStrategy == OutputStrategy.USE_WRAPPER || outputStrategy == OutputStrategy.INJECT_METADATA)
                 ? context.getProperty(KEY_FORMAT).asAllowableValue(KeyFormat.class)
                 : KeyFormat.BYTE_ARRAY;
+        preserveTombstones = (outputStrategy == OutputStrategy.USE_WRAPPER || outputStrategy == OutputStrategy.INJECT_METADATA)
+                && context.getProperty(PRESERVE_TOMBSTONES).asBoolean();
         brokerUri = context.getProperty(CONNECTION_SERVICE).asControllerService(KafkaConnectionService.class).getBrokerUri();
         maxConsumerCount = context.getMaxConcurrentTasks();
         activeConsumerCount.set(0);
@@ -795,11 +814,9 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
 
         final RecordReaderFactory readerFactory = context.getProperty(RECORD_READER).asControllerService(RecordReaderFactory.class);
         int recordIndex = 0;
-        int skippedTombstones = 0;
         for (final ByteRecord byteRecord : records) {
             recordIndex++;
             if (byteRecord.isTombstone()) {
-                skippedTombstones++;
                 continue;
             }
 
@@ -824,14 +841,14 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             return new ConfigVerificationResult.Builder()
                 .verificationStepName("Parse Records")
                 .outcome(Outcome.SKIPPED)
-                .explanation("No records were received to parse (skipped " + skippedTombstones + " tombstones)")
+                .explanation("No records were received to parse")
                 .build();
         }
 
         return new ConfigVerificationResult.Builder()
             .verificationStepName("Parse Records")
             .outcome(Outcome.SUCCESSFUL)
-            .explanation("Successfully parsed " + recordIndex + " records (skipped " + skippedTombstones + " tombstones)")
+            .explanation("Successfully parsed " + recordIndex + " records")
             .build();
     }
 
@@ -921,21 +938,40 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
             case RECORD -> processInputRecords(context, session, offsetTracker, consumerRecords);
             case FLOW_FILE -> processInputFlowFile(session, offsetTracker, consumerRecords);
             case DEMARCATOR -> {
-                final Iterator<ByteRecord> demarcatedRecords = transformDemarcator(context, consumerRecords);
+                final Iterator<ByteRecord> demarcatedRecords = transformDemarcator(context, session, offsetTracker, consumerRecords);
                 processInputFlowFile(session, offsetTracker, demarcatedRecords);
             }
         }
     }
 
-    private Iterator<ByteRecord> transformDemarcator(final ProcessContext context, final Iterator<ByteRecord> consumerRecords) {
+    /**
+     * Skips Kafka tombstones (counting them and tracking their offsets) and demarcates the remaining records into bundles.
+     * A null Message Demarcator passes the filtered records through unbundled.
+     */
+    private Iterator<ByteRecord> transformDemarcator(
+            final ProcessContext context, final ProcessSession session, final OffsetTracker offsetTracker, final Iterator<ByteRecord> consumerRecords) {
+        final List<ByteRecord> recordsToBundle = new ArrayList<>();
+        while (consumerRecords.hasNext()) {
+            final ByteRecord consumerRecord = consumerRecords.next();
+            if (consumerRecord.isTombstone()) {
+                session.adjustCounter("Records Received from " + consumerRecord.getTopic(), 1, false);
+                offsetTracker.update(consumerRecord);
+                continue;
+            }
+
+            offsetTracker.trackOffset(consumerRecord);
+            recordsToBundle.add(consumerRecord);
+        }
+
         final String demarcatorValue = context.getProperty(MESSAGE_DEMARCATOR).getValue();
         if (demarcatorValue == null) {
-            return consumerRecords;
+            return recordsToBundle.iterator();
         }
 
         final byte[] demarcator = demarcatorValue.getBytes(StandardCharsets.UTF_8);
         final boolean separateByKey = context.getProperty(SEPARATE_BY_KEY).asBoolean();
-        return new ByteRecordBundler(demarcator, separateByKey, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets).bundle(consumerRecords);
+        return new ByteRecordBundler(demarcator, separateByKey, keyEncoding, headerNamePattern, headerValueConverter, commitOffsets)
+                .bundle(recordsToBundle.iterator());
     }
 
     private void processInputRecords(final ProcessContext context, final ProcessSession session, final OffsetTracker offsetTracker, final Iterator<ByteRecord> consumerRecords) {
@@ -970,7 +1006,7 @@ public class ConsumeKafka extends AbstractProcessor implements VerifiableProcess
 
             converter = new WrapperRecordStreamKafkaMessageConverter(readerFactory, writerFactory, keyReaderFactory,
                 headerValueConverter, headerNamePattern, keyFormat, keyEncoding, commitOffsets, offsetTracker, getLogger(), brokerUri, outputStrategy,
-                recordGroupingStrategy);
+                preserveTombstones, recordGroupingStrategy);
         }
 
         converter.toFlowFiles(session, consumerRecords);

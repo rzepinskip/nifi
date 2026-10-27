@@ -45,6 +45,7 @@ public class WrapperRecordStreamKafkaMessageConverter extends AbstractRecordStre
     private final RecordReaderFactory keyReaderFactory;
     private final KeyFormat keyFormat;
     private final OutputStrategy outputStrategy;
+    private final boolean preserveTombstones;
 
     public WrapperRecordStreamKafkaMessageConverter(
             final RecordReaderFactory readerFactory,
@@ -59,12 +60,30 @@ public class WrapperRecordStreamKafkaMessageConverter extends AbstractRecordStre
             final ComponentLog logger,
             final String brokerUri,
             final OutputStrategy outputStrategy,
+            final boolean preserveTombstones,
             final RecordGroupingStrategy recordGroupingStrategy) {
         super(readerFactory, writerFactory, headerValueConverter, headerNamePattern, keyEncoding, commitOffsets, offsetTracker, logger, brokerUri,
                 recordGroupingStrategy);
         this.keyReaderFactory = keyReaderFactory;
         this.keyFormat = keyFormat;
         this.outputStrategy = outputStrategy;
+        this.preserveTombstones = preserveTombstones;
+    }
+
+    @Override
+    protected Record convertTombstone(final ByteRecord consumerRecord, final Map<String, String> attributes)
+            throws IOException, SchemaNotFoundException, MalformedRecordException {
+        if (!preserveTombstones) {
+            return null;
+        }
+
+        final WrapperRecordKeyReader keyReader = new WrapperRecordKeyReader(keyFormat, keyReaderFactory, keyEncoding, logger);
+        final Tuple<RecordField, Object> recordKey = keyReader.toWrapperRecordKey(consumerRecord.getKey().orElse(null), attributes);
+        if (outputStrategy == OutputStrategy.USE_WRAPPER) {
+            return new ConsumeWrapperRecord(headerValueConverter).toTombstoneRecord(consumerRecord, recordKey);
+        }
+
+        return InjectMetadataRecord.toTombstoneRecord(headerValueConverter, consumerRecord, recordKey);
     }
 
     @Override

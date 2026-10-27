@@ -19,22 +19,33 @@ package org.apache.nifi.kafka.processors;
 import org.apache.nifi.components.Backlog;
 import org.apache.nifi.components.ConfigVerificationResult;
 import org.apache.nifi.components.ConfigVerificationResult.Outcome;
+import org.apache.nifi.json.JsonRecordSetWriter;
 import org.apache.nifi.kafka.processors.consumer.KafkaMetricName;
 import org.apache.nifi.kafka.processors.consumer.ProcessingStrategy;
 import org.apache.nifi.kafka.service.api.KafkaConnectionService;
+import org.apache.nifi.kafka.service.api.common.OffsetSummary;
 import org.apache.nifi.kafka.service.api.common.PartitionState;
 import org.apache.nifi.kafka.service.api.common.TopicPartitionSummary;
 import org.apache.nifi.kafka.service.api.consumer.KafkaConsumerService;
+import org.apache.nifi.kafka.service.api.consumer.PollingSummary;
 import org.apache.nifi.kafka.service.api.record.ByteRecord;
 import org.apache.nifi.kafka.shared.attribute.KafkaFlowFileAttribute;
+import org.apache.nifi.kafka.shared.property.OutputStrategy;
 import org.apache.nifi.reporting.InitializationException;
+import org.apache.nifi.schema.access.SchemaAccessUtils;
 import org.apache.nifi.serialization.RecordReader;
 import org.apache.nifi.serialization.RecordReaderFactory;
+import org.apache.nifi.serialization.RecordSetWriterFactory;
+import org.apache.nifi.serialization.record.MockRecordParser;
+import org.apache.nifi.serialization.record.MockRecordWriter;
+import org.apache.nifi.serialization.record.RecordFieldType;
+import org.apache.nifi.util.MockFlowFile;
 import org.apache.nifi.util.TestRunner;
 import org.apache.nifi.util.TestRunners;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -107,6 +118,8 @@ class ConsumeKafkaTest {
     private static final String SERVICE_ID = KafkaConnectionService.class.getSimpleName();
 
     private static final String READER_ID = "record-reader";
+
+    private static final String WRITER_ID = "record-writer";
 
     private static final String CONSUMER_GROUP_ID = ConsumeKafkaTest.class.getSimpleName();
 
@@ -373,6 +386,79 @@ class ConsumeKafkaTest {
     }
 
     @Test
+    public void testOnTriggerDemarcatorSkipsTombstoneAndKeepsEmptyValue() throws Exception {
+        setConnectionService();
+        configureProcessor();
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.DEMARCATOR);
+        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, RECORD_DEMARCATOR);
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+
+        final ByteRecord emptyRecord = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0, 0L, new ArrayList<>(), null, new byte[0], 1);
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 1, 0L, new ArrayList<>(), null, new byte[0], 1, true);
+        final ByteRecord valueRecord = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 2, 0L, new ArrayList<>(), null, FIRST_RECORD_VALUE, 1);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(emptyRecord, tombstone, valueRecord)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 1);
+        final MockFlowFile flowFile = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).getFirst();
+        flowFile.assertContentEquals(FIRST_RECORD_VALUE);
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_OFFSET, "0");
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_MAX_OFFSET, "2");
+        flowFile.assertAttributeEquals(KafkaFlowFileAttribute.KAFKA_COUNT, "2");
+        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
+        assertEquals(3L, runner.getCounterValue("Records Received from " + TEST_TOPIC_NAME));
+        assertEquals(2L, committedOffset());
+    }
+
+    @Test
+    public void testOnTriggerDemarcatorCommitsSkippedTombstoneOffset() throws Exception {
+        setConnectionService();
+        configureProcessor();
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.DEMARCATOR);
+        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, RECORD_DEMARCATOR);
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+
+        final long tombstoneOffset = 4L;
+        final ByteRecord valueRecord = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0, 0L, new ArrayList<>(), null, FIRST_RECORD_VALUE, 1);
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, tombstoneOffset, 0L, new ArrayList<>(), null, new byte[0], 1, true);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(valueRecord, tombstone)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 1);
+        final MockFlowFile flowFile = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).getFirst();
+        flowFile.assertContentEquals(FIRST_RECORD_VALUE);
+        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
+
+        assertEquals(tombstoneOffset, committedOffset());
+    }
+
+    @Test
+    public void testOnTriggerDemarcatorSkipsTombstoneOnlyPoll() throws InitializationException {
+        setConnectionService();
+        configureProcessor();
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.DEMARCATOR);
+        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, RECORD_DEMARCATOR);
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0, 0L, new ArrayList<>(), null, new byte[0], 1, true);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(tombstone)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 0);
+        assertEquals(1L, runner.getCounterValue("Records Received from " + TEST_TOPIC_NAME));
+        assertEquals(0L, committedOffset());
+    }
+
+    @Test
     public void testVerifySkipsTombstoneAndParsesFollowingRecord() throws Exception {
         final RecordReaderFactory readerFactory = recordReaderFactory();
         final RecordReader recordReader = mock(RecordReader.class);
@@ -390,7 +476,7 @@ class ConsumeKafkaTest {
 
         final ConfigVerificationResult parseResult = parseResult(verifyRecords());
         assertEquals(Outcome.SUCCESSFUL, parseResult.getOutcome());
-        assertEquals("Successfully parsed 2 records (skipped 1 tombstones)", parseResult.getExplanation());
+        assertEquals("Successfully parsed 2 records", parseResult.getExplanation());
     }
 
     @Test
@@ -401,7 +487,7 @@ class ConsumeKafkaTest {
 
         final ConfigVerificationResult parseResult = parseResult(verifyRecords());
         assertEquals(Outcome.SUCCESSFUL, parseResult.getOutcome());
-        assertEquals("Successfully parsed 1 records (skipped 1 tombstones)", parseResult.getExplanation());
+        assertEquals("Successfully parsed 1 records", parseResult.getExplanation());
         verify(readerFactory, never()).createRecordReader(any(), any(), anyLong(), any());
     }
 
@@ -418,6 +504,163 @@ class ConsumeKafkaTest {
         assertEquals(Outcome.FAILED, parseResult.getOutcome());
         assertEquals("Failed to parse Record number 2: java.io.IOException: empty value", parseResult.getExplanation());
         verify(readerFactory).createRecordReader(any(), any(), anyLong(), any());
+    }
+
+    @Test
+    public void testPreserveTombstonesValidForWrapperStrategies() throws InitializationException {
+        final MockRecordWriter writer = new MockRecordWriter(null, false);
+        enableRecordServices(new MockRecordParser(), writer);
+        runner.enableControllerService(writer);
+        runner.setProperty(ConsumeKafka.OUTPUT_STRATEGY, OutputStrategy.USE_WRAPPER);
+        runner.setProperty(ConsumeKafka.PRESERVE_TOMBSTONES, "true");
+        runner.assertValid();
+
+        runner.setProperty(ConsumeKafka.OUTPUT_STRATEGY, OutputStrategy.INJECT_METADATA);
+        runner.assertValid();
+    }
+
+    @Test
+    public void testPreserveTombstoneUseWrapperTransfersToSuccess() throws Exception {
+        assertPreservedTombstone(OutputStrategy.USE_WRAPPER);
+    }
+
+    @Test
+    public void testPreserveTombstoneInjectMetadataTransfersToSuccess() throws Exception {
+        assertPreservedTombstone(OutputStrategy.INJECT_METADATA);
+    }
+
+    @Test
+    public void testPreserveTombstoneUseWrapperCommitsOffsetPastPrecedingValue() throws Exception {
+        assertPreservedTombstoneFollowsValue(OutputStrategy.USE_WRAPPER);
+    }
+
+    @Test
+    public void testPreserveTombstoneInjectMetadataCommitsOffsetPastPrecedingValue() throws Exception {
+        assertPreservedTombstoneFollowsValue(OutputStrategy.INJECT_METADATA);
+    }
+
+    @Test
+    public void testPreserveTombstonesIgnoredForDemarcator() throws InitializationException {
+        setConnectionService();
+        configureProcessor();
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.DEMARCATOR);
+        runner.setProperty(ConsumeKafka.MESSAGE_DEMARCATOR, RECORD_DEMARCATOR);
+        runner.setProperty(ConsumeKafka.PRESERVE_TOMBSTONES, "true");
+
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0, 0L, new ArrayList<>(), null, new byte[0], 1, true);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(tombstone)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 0);
+        assertEquals(1L, runner.getCounterValue("Records Received from " + TEST_TOPIC_NAME));
+    }
+
+    @Test
+    public void testPreserveTombstonesIgnoredForUseValue() throws Exception {
+        final RecordReaderFactory readerFactory = mock(RecordReaderFactory.class);
+        when(readerFactory.getIdentifier()).thenReturn(READER_ID);
+        final MockRecordWriter writer = new MockRecordWriter(null, false);
+        enableRecordServices(readerFactory, writer);
+        runner.enableControllerService(writer);
+        runner.setProperty(ConsumeKafka.OUTPUT_STRATEGY, OutputStrategy.USE_VALUE);
+        runner.setProperty(ConsumeKafka.PRESERVE_TOMBSTONES, "true");
+
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0, 0L, List.of(), null, new byte[0], 1, true);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(tombstone)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 0);
+        runner.assertTransferCount(ConsumeKafka.PARSE_FAILURE, 0);
+        verify(readerFactory, never()).createRecordReader(any(), any(), anyLong(), any());
+    }
+
+    private void assertPreservedTombstone(final OutputStrategy outputStrategy) throws InitializationException {
+        final JsonRecordSetWriter writer = new JsonRecordSetWriter();
+        enableRecordServices(new MockRecordParser(), writer);
+        runner.setProperty(writer, SchemaAccessUtils.SCHEMA_ACCESS_STRATEGY, SchemaAccessUtils.INHERIT_RECORD_SCHEMA);
+        runner.setProperty(writer, JsonRecordSetWriter.OUTPUT_GROUPING, "output-oneline");
+        runner.enableControllerService(writer);
+        runner.setProperty(ConsumeKafka.OUTPUT_STRATEGY, outputStrategy);
+        runner.setProperty(ConsumeKafka.PRESERVE_TOMBSTONES, "true");
+        runner.assertValid();
+
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 1L, 0L, List.of(),
+                "acct".getBytes(StandardCharsets.UTF_8), new byte[0], 1, true);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(tombstone)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 1);
+        runner.assertTransferCount(ConsumeKafka.PARSE_FAILURE, 0);
+        final MockFlowFile flowFile = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS).getFirst();
+        flowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
+        flowFile.assertAttributeEquals("record.count", "1");
+        final String content = new String(flowFile.toByteArray(), StandardCharsets.UTF_8);
+        assertTrue(content.contains("\"kafka.tombstone\":true"));
+    }
+
+    private void assertPreservedTombstoneFollowsValue(final OutputStrategy outputStrategy) throws InitializationException {
+        final MockRecordParser parser = new MockRecordParser();
+        parser.addSchemaField("name", RecordFieldType.STRING);
+        parser.addRecord("alpha");
+        final JsonRecordSetWriter writer = new JsonRecordSetWriter();
+        enableRecordServices(parser, writer);
+        runner.setProperty(writer, SchemaAccessUtils.SCHEMA_ACCESS_STRATEGY, SchemaAccessUtils.INHERIT_RECORD_SCHEMA);
+        runner.setProperty(writer, JsonRecordSetWriter.OUTPUT_GROUPING, "output-oneline");
+        runner.enableControllerService(writer);
+        runner.setProperty(ConsumeKafka.OUTPUT_STRATEGY, outputStrategy);
+        runner.setProperty(ConsumeKafka.PRESERVE_TOMBSTONES, "true");
+        runner.assertValid();
+
+        when(kafkaConnectionService.getBrokerUri()).thenReturn(BROKER_URI);
+        when(kafkaConnectionService.getConsumerService(any())).thenReturn(kafkaConsumerService);
+        final ByteRecord value = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 0L, 0L, List.of(), null, FIRST_RECORD_VALUE, 1);
+        final ByteRecord tombstone = new ByteRecord(TEST_TOPIC_NAME, FIRST_PARTITION, 2L, 0L, List.of(),
+                "acct".getBytes(StandardCharsets.UTF_8), new byte[0], 1, true);
+        when(kafkaConsumerService.poll(any(Duration.class))).thenReturn(List.of(value, tombstone)).thenReturn(List.of());
+        when(kafkaConsumerService.currentLag(any())).thenReturn(OptionalLong.empty());
+
+        runner.run();
+
+        runner.assertTransferCount(ConsumeKafka.PARSE_FAILURE, 0);
+        runner.assertTransferCount(ConsumeKafka.SUCCESS, 2);
+        final List<MockFlowFile> flowFiles = runner.getFlowFilesForRelationship(ConsumeKafka.SUCCESS);
+        final MockFlowFile valueFlowFile = flowFiles.stream()
+                .filter(flowFile -> new String(flowFile.toByteArray(), StandardCharsets.UTF_8).contains("alpha"))
+                .findFirst()
+                .orElseThrow();
+        final MockFlowFile tombstoneFlowFile = flowFiles.stream()
+                .filter(flowFile -> new String(flowFile.toByteArray(), StandardCharsets.UTF_8).contains("\"kafka.tombstone\":true"))
+                .findFirst()
+                .orElseThrow();
+        valueFlowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
+        valueFlowFile.assertAttributeEquals("record.count", "1");
+        tombstoneFlowFile.assertAttributeNotExists(KafkaFlowFileAttribute.KAFKA_TOMBSTONE);
+        tombstoneFlowFile.assertAttributeEquals("record.count", "1");
+        assertEquals(2L, committedOffset());
+    }
+
+    private void enableRecordServices(final RecordReaderFactory reader, final RecordSetWriterFactory writer) throws InitializationException {
+        runner.addControllerService(READER_ID, reader);
+        runner.enableControllerService(reader);
+        runner.addControllerService(WRITER_ID, writer);
+
+        setConnectionService();
+        configureProcessor();
+        runner.setProperty(ConsumeKafka.PROCESSING_STRATEGY, ProcessingStrategy.RECORD);
+        runner.setProperty(ConsumeKafka.RECORD_READER, READER_ID);
+        runner.setProperty(ConsumeKafka.RECORD_WRITER, WRITER_ID);
     }
 
     private RecordReaderFactory recordReaderFactory() throws InitializationException {
@@ -444,6 +687,14 @@ class ConsumeKafkaTest {
                 .filter(result -> "Parse Records".equals(result.getVerificationStepName()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private long committedOffset() {
+        final ArgumentCaptor<PollingSummary> pollingSummaryCaptor = ArgumentCaptor.forClass(PollingSummary.class);
+        verify(kafkaConsumerService).commit(pollingSummaryCaptor.capture());
+        final OffsetSummary offsetSummary = pollingSummaryCaptor.getValue().getOffsets().get(new TopicPartitionSummary(TEST_TOPIC_NAME, FIRST_PARTITION));
+        assertNotNull(offsetSummary);
+        return offsetSummary.getOffset();
     }
 
     private void configureProcessor() {

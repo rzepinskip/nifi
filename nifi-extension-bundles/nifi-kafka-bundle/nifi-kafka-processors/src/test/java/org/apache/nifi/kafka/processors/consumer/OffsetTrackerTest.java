@@ -17,6 +17,8 @@
 package org.apache.nifi.kafka.processors.consumer;
 
 import org.apache.nifi.kafka.service.api.common.TopicPartitionSummary;
+import org.apache.nifi.kafka.service.api.consumer.AutoOffsetReset;
+import org.apache.nifi.kafka.service.api.consumer.PollingContext;
 import org.apache.nifi.kafka.service.api.record.ByteRecord;
 import org.junit.jupiter.api.Test;
 
@@ -97,6 +99,19 @@ class OffsetTrackerTest {
     }
 
     @Test
+    void testUpdateKeepsHighestOffset() {
+        final OffsetTracker offsetTracker = new OffsetTracker();
+        offsetTracker.update(newByteRecord(FIRST_TOPIC, FIRST_PARTITION, null, new byte[0], 1, 4L));
+        offsetTracker.update(newByteRecord(FIRST_TOPIC, FIRST_PARTITION, null, FIRST_VALUE, 1, 0L));
+
+        final PollingContext pollingContext = new PollingContext("group", List.of(FIRST_TOPIC), AutoOffsetReset.EARLIEST);
+        final long committedOffset = offsetTracker.getPollingSummary(pollingContext).getOffsets()
+                .get(new TopicPartitionSummary(FIRST_TOPIC, FIRST_PARTITION))
+                .getOffset();
+        assertEquals(4L, committedOffset);
+    }
+
+    @Test
     void testClearRemovesPartitionAggregates() {
         final OffsetTracker offsetTracker = new OffsetTracker();
         recordConsumed(offsetTracker, newByteRecord(FIRST_TOPIC, FIRST_PARTITION, RECORD_KEY, FIRST_VALUE, 2));
@@ -126,6 +141,10 @@ class OffsetTrackerTest {
     }
 
     private static ByteRecord newByteRecord(final String topic, final int partition, final byte[] key, final byte[] value, final long bundledCount) {
-        return new ByteRecord(topic, partition, 0, 0L, List.of(), key, value, bundledCount);
+        return newByteRecord(topic, partition, key, value, bundledCount, 0L);
+    }
+
+    private static ByteRecord newByteRecord(final String topic, final int partition, final byte[] key, final byte[] value, final long bundledCount, final long offset) {
+        return new ByteRecord(topic, partition, offset, 0L, List.of(), key, value, bundledCount);
     }
 }

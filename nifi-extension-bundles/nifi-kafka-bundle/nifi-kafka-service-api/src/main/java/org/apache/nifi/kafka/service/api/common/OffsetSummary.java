@@ -30,7 +30,13 @@ public class OffsetSummary {
         return offset;
     }
 
+    /**
+     * Retains the greatest offset recorded for the partition.
+     * Kafka commits the next offset after this value.
+     */
     public void setOffset(final long offset) {
-        this.offset = offset;
+        if (offset > this.offset) {
+            this.offset = offset;
+        }
     }
 }
